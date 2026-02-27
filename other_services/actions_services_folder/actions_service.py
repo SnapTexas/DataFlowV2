@@ -61,6 +61,7 @@ async def main():
     client.on_disconnect = disconnected_from_mqtt
     client.on_message = partial(do_tasks,ml_report_topic)
     client.on_connect = partial(client_subscribe,actions_topic)
+    
     await client.connect(host=broker,port=port)
 
     

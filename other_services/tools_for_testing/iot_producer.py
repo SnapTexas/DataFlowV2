@@ -6,32 +6,46 @@ from gmqtt import Client as mqtt_client
 async def main():
     broker = "broker.hivemq.com"
     port = 1883
-    #iot-data-pipeline-v2/
-    publish_topic = "00989800/actions"
-    
-    # Task list to match your worker's allowed tasks
+    publish_topic = "00989800/call-from-bridge-topic"
     tasks = ["Alert", "Task1", "Task2", "InvalidTask"]
     
+    # Use a shorter, cleaner client ID
     client = mqtt_client(client_id=str(uuid.uuid4()))
 
     print(f"Connecting to {broker}...")
-    await client.connect(broker, port)
+    
+    # Set a keepalive to help detect drops faster
+    try:
+        await client.connect(broker, port, keepalive=30)
+    except Exception as e:
+        print(f"Connection failed: {e}")
+        return
 
     print("Starting publisher loop. Press Ctrl+C to stop.")
+    
     try:
         while True:
-            # Pick a random task from the list
-            chosen_task = random.choice(tasks)
+            # 1. GUARD: Check if we are actually connected
+            if client.is_connected:
+                chosen_task = random.choice(tasks)
+                print(f"Sending task: {chosen_task}")
+                
+                # Use qos=1 to ensure the broker actually gets it
+                client.publish(publish_topic, chosen_task, qos=1)
+            else:
+                print(" Client disconnected! Waiting for auto-reconnect...")
             
-            print(f"Sending task: {chosen_task}")
-            client.publish(publish_topic, chosen_task)
-            
-            # Use await asyncio.sleep so the network loop can run in the background
+            # 2. HEARTBEAT: This allows gmqtt to process pings/reconnects
             await asyncio.sleep(5) 
             
-    except KeyboardInterrupt:
-        print("Stopping publisher...")
-        await client.disconnect()
+    except asyncio.CancelledError:
+        print("Publisher stopped.")
+    finally:
+        if client.is_connected:
+            await client.disconnect()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
