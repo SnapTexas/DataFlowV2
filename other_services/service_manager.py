@@ -1,56 +1,103 @@
-import  uuid
-from gmqtt import Client as mqtt_client
-from functools import partial
 import asyncio
+from gmqtt import Client as mqtt
+import uuid
+import ssl
+from functools import partial
+sub_topics=["00989800/bridge_calls_recv","00989800/validation_calls_recv"]
 
-# call backs 
-def client_subscribe_to_all_topics(client, flags, rc, properties,call_from_bridge_topic,call_from_validation_topic): 
-    print("connected ")  
-    #print(call_from_bridge_topic,call_from_validation_topic)
-    client.subscribe(call_from_bridge_topic)
-    print(f"Subscribed to topic : {call_from_bridge_topic}")
-    client.subscribe(call_from_validation_topic)
-    print(f"Subscribed to topic : {call_from_validation_topic}")
 
-def disconnected_from_mqtt(client, packet, exc=None):
-    print("Disconnected from MQtt")
+#needs partial
+def on_connect(client, flags, rc, properties,subscribe_topics:list):
+    for i in subscribe_topics:
+        client.subscribe(i)
 
-def listen_to_service_calls(client, topic, payload, qos, properties,call_from_bridge_topic,call_from_validation_topic):
-    if topic == call_from_bridge_topic:
-        print(f"call came from bridge service : topic:{topic} msg:{payload.decode('utf-8')}")
-    if topic == call_from_validation_topic:
-        print(f"call came from validation service : topic:{topic} msg:{payload.decode('utf-8')}")
+#needs partial
+async def on_message(client, topic, payload, qos, properties,incomming_calls_queue):
+    #put the data in the calls queue for worker to process
+    data={"topic":topic,
+          "data":payload.decode('utf-8')}
+    await incomming_calls_queue.put_nowait(data)
 
-def respond_to_service_calls(client,topic,msg):
-    client.publish(topic,msg.encode('utf-8'))
+async def get_bridge_services_status():
+    pass
+
+def choose_service(list_of_services):
+    #from the list of bridge services status return the first service id which is idle
+    for service in list_of_services:
+        if service["status"] == "IDLE":
+            return service["id"]
+            #activate the first one for now
+            
+
+
+async def start_bridge_service(client,service_id):
+    #Command to start processing messages
+    start_service_topic=f"00989800/call_to_bridge_service/{service_id}"
+    await client.publish(start_service_topic,"START")
     
+async def stop_bridge_service(client,service_id):
+    #Stop means to go idle
+    start_service_topic=f"00989800/call_to_bridge_service/{service_id}"
+    await client.publish(start_service_topic,"IDLE")
 
-def get_list_idle_bridge_services(msg):
+async def verify_bridge_service_call_response(calls_to_bridge_services):
     pass
+    # look at the queue who were messaged did they respond successfully
+    # if yess inform if no inform or ping them to see if they are alive else till dead service
 
-def get_list_idle_data_validation_service():
-    pass
+async def respond_msg(client,topic,msg):
+    if topic==sub_topics[0]:
+        #Bridge service response
+        if msg=="UNDERLOAD":
+            bridge_services_status_list = await get_bridge_services_status()
+            chosen_service_id=choose_service(bridge_services_status_list)
+            await start_bridge_service(client,chosen_service_id)  
+
+    elif topic==sub_topics[1]:
+        #Validations service response
+        pass
+    else:
+        pass
+    #await client.publish(topic,msg)
+
+async def worker(client,queue):
+    while True:
+        msg = await queue.get()   # waits without blocking
+        print(f"Recieved Msg:{msg["data"]} from topic :{msg["topic"]}")
+        await respond_msg(client,msg["topic"],msg["data"])        # slow work here
+        queue.task_done()
+
+def on_disconnect(client, packet, exc=None):
+    print("Disconnected ...")
+    print()
+
+def on_subscribe(client, mid, qos, properties):
+    print("subscribed to topics")
+    print()
 
 async def main():
-    print("Running...")
-    broker="broker.hivemq.com"
-    port=1883
-    call_from_bridge_topic="00989800/call-from-bridge-topic"
-    call_to_bridge_topic="00989800/call-to-bridge-topic"
-    call_from_validation_topic="00989800/call-from-validation-topic"
+    #store calls from services
+    incomming_calls_queue=asyncio.Queue()
+
+    host="31d09ce8b7fa4a92aafc62ae06187541.s1.eu.hivemq.cloud"
+    port=8883
+    username=""
+    password=""
     client_id=str(uuid.uuid4())
+    client=mqtt(client_id)
 
-    client=mqtt_client(client_id=client_id)
-    client.on_connect = partial(client_subscribe_to_all_topics,
-                                call_from_bridge_topic=call_from_bridge_topic,
-                                call_from_validation_topic=call_from_validation_topic)
-    client.on_message = partial(listen_to_service_calls,
-                                call_from_bridge_topic=call_from_bridge_topic,
-                                call_from_validation_topic=call_from_validation_topic)
-    client.on_disconnect = disconnected_from_mqtt
-    
+    client.set_auth_credentials(username=username, password=password)
 
-    await client.connect(host=broker,port=port)
+    ssl_ctx = ssl.create_default_context()
+    client.on_connect=on_connect
+    client.on_message = partial(on_message,incomming_calls_queue=incomming_calls_queue)
+    client.on_disconnect = on_disconnect
+    client.on_subscribe=on_subscribe
+
+    await client.connect(host=host,
+                         port=port,
+                         ssl=ssl_ctx)
+    asyncio.create_task(worker(client=client,queue=incomming_calls_queue))
 
     await asyncio.Event().wait()
 
