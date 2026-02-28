@@ -14,12 +14,15 @@ publish_topics={
                 "validation_call_topic":"00989800/to_validation_calls"
                 }
 thresh_bridge_services=1# how many bridge services should run on default
+thresh_validation_services=1
+
 
 # Separate response lists for Bridge and Validation
 bridge_status_response_calls=[]
 validation_status_response_calls=[]
 
 collect_bridge_status_reponse=False
+collect_validation_status_response = False
 active_bridge_service_set = set()
 active_validation_service_set = set() # Track validation services separately
 
@@ -82,14 +85,14 @@ async def get_bridge_services_status(bridge_client,call_to_service_topic):# send
 
 # Helper for Validation status check
 async def get_validation_services_status(validation_client,call_to_service_topic):
-    global validation_status_response_calls,collect_bridge_status_reponse
+    global validation_status_response_calls,collect_validation_status_response
     service_data={"service_id":"ALL","msg":"STATUS","condition":None}
     service_data=json.dumps(service_data)
     validation_client.publish(call_to_service_topic,service_data)
     validation_status_response_calls.clear()
-    collect_bridge_status_reponse=True
+    collect_validation_status_response=True
     await asyncio.sleep(10)
-    collect_bridge_status_reponse=False
+    collect_validation_status_response=False
 
 def collect_bridge_service_status_response(data):
     global bridge_status_response_calls
@@ -180,7 +183,7 @@ async def worker(bridge_client, validation_client, queue):# checks the queue for
         else:
             get_active_validation_services(msg['data'])
 
-        if collect_bridge_status_reponse:
+        if collect_bridge_status_reponse or collect_validation_status_response:
             try:
                 # Convert the string to a DICT so choose_service functions can read it
                 decoded_data = json.loads(msg['data'])
@@ -200,6 +203,53 @@ def on_disconnect(client, packet, exc=None):# just prints diconnected used to se
 def on_subscribe(client, mid, qos, properties):# just prints subscribed used to see when disconnected
     print("subscribed to topics")
 
+async def sync_infrastructure_and_boot(bridge_client, validation_client):
+    print("--- Infrastructure Sync: Waiting for services to check in ---")
+    
+    while True:
+        # 1. Trigger fresh status sweep
+        await asyncio.gather(
+            get_bridge_services_status(bridge_client, publish_topics['bridge_call_topic']),
+            get_validation_services_status(validation_client, publish_topics['validation_call_topic'])
+        )
+        
+        # Check how many services total (IDLE or RUNNING) responded
+        bridge_found = len(bridge_status_response_calls)
+        val_found = len(validation_status_response_calls)
+
+        # We wait until we see at least the minimum required services online
+        if bridge_found >= thresh_bridge_services and val_found >= thresh_validation_services:
+            print(f"SUCCESS: Infrastructure ready. Found {bridge_found} Bridges and {val_found} Validations.")
+            break
+        
+        print(f"STILL WAITING: Bridges: {bridge_found}/{thresh_bridge_services}, "
+              f"Validations: {val_found}/{thresh_validation_services}. Retrying in 5s...")
+        await asyncio.sleep(5)
+
+    # --- Initial Scaling Phase ---
+    print("--- Initial Scaling: Booting minimum required services ---")
+
+    # 1. Bridge Scaling Check
+    if len(active_bridge_service_set) < thresh_bridge_services:
+        chosen_id = choose_service_start(bridge_status_response_calls)
+        if chosen_id:
+            await start_bridge_service(bridge_client, chosen_id)
+        elif bridge_found == 0:
+            print("WARNING: No Bridge services responded. Check connections.")
+        else:
+            print("INFO: All Bridges are currently busy or no IDLE service available.")
+
+    # 2. Validation Scaling Check
+    if len(active_validation_service_set) < thresh_validation_services:
+        chosen_id = choose_service_start(validation_status_response_calls)
+        if chosen_id:
+            val_topic = f"00989800/call_to_validation_service/{chosen_id}"
+            validation_client.publish(val_topic, "START")
+            print(f"Initial start command sent to Validation Service: {chosen_id}")
+        elif val_found == 0:
+            print("WARNING: No Validation services responded.")
+        else:
+            print("INFO: No IDLE Validation services found to start.")
 async def main():
     #store calls from services
     incomming_calls_queue=asyncio.Queue()
@@ -228,9 +278,20 @@ async def main():
     validation_client.on_subscribe=on_subscribe
     await validation_client.connect(host=host, port=port, ssl=ssl_ctx)
 
+    
     asyncio.create_task(worker(bridge_client=bridge_client, validation_client=validation_client, queue=incomming_calls_queue))
 
+    await sync_infrastructure_and_boot(bridge_client, validation_client)
+
+    print(f"Discovery Complete. Active Bridges: {len(active_bridge_service_set)}, Active Validations: {len(active_validation_service_set)}")
+
+    # 3. Optional: Initial Scaling Check
+    # If 0 services are running but you need 1 (thresh_bridge_services), start one now.
+    # --- Bridge Scaling Check ---
+    
+
     await asyncio.Event().wait()
+
 
 if __name__=="__main__":
     asyncio.run(main())
