@@ -10,25 +10,25 @@ current_status="RUNNING"
 current_condition="NORMAL"
 service_id=str(uuid.uuid4())
 print(service_id)
-subscribe_topics={
+subscribe_topic={
                 "bridge_call_topic":"00989800/to_bridge_calls" 
                 }
 
-publish_topics={
+publish_topic={
                 "bridge_call_recv_topic":"00989800/from_bridge_calls"
             }
 # _______ callbacks ______________
 
 def on_connect(client,flags, rc, properties):
-    global subscribe_topics
+    global subscribe_topic
     
-    client.subscribe(subscribe_topics['bridge_call_topic'])
-    print(f"subscribed to topic:{subscribe_topics['bridge_call_topic']}")
+    client.subscribe(subscribe_topic['bridge_call_topic'])
+    print(f"subscribed to topic:{subscribe_topic['bridge_call_topic']}")
     print()
 
 
 
-def update_health_check(publish_topics):
+def update_health_check(publish_topic):
     global service_id,current_status
     data={"service_id":service_id,"status":current_status,"condition":current_condition}
 

@@ -73,7 +73,7 @@ def get_active_validation_services(service_data):# gets or updates the result ac
 
 async def get_bridge_services_status(bridge_client):# send a msg to all bridge services to respond with status which is collected by worker
     global active_bridge_service_set,thresh_bridge_services,bridge_status_response_calls,collect_bridge_status_reponse
-    service_data={"service_id":"ALL","msg":"STATUS","condition":None}
+    service_data={"service_id":"ALL","msg":"STATUS","condition":None,"expected_reponse":True}
     service_data=json.dumps(service_data)
     bridge_client.publish(publish_topics['bridge_call_topic'],service_data)
     #For now simply sleep for 10s and then collect whatever the response was 
@@ -86,7 +86,7 @@ async def get_bridge_services_status(bridge_client):# send a msg to all bridge s
 # Helper for Validation status check
 async def get_validation_services_status(validation_client):
     global validation_status_response_calls,collect_validation_status_response
-    service_data={"service_id":"ALL","msg":"STATUS","condition":None}
+    service_data={"service_id":"ALL","msg":"STATUS","condition":None,"expected_reponse":True}
     service_data=json.dumps(service_data)
     validation_client.publish(publish_topics['validation_call_topic'],service_data)
     validation_status_response_calls.clear()
@@ -129,7 +129,9 @@ async def start_bridge_service(bridge_client,service_id): # starts the service w
     
     data={"service_id":service_id,
           "msg":"START",
-          "condition":None}
+          "condition":None,
+          "expected_reponse":False
+          }
     data=json.dumps(data)
     bridge_client.publish(publish_topics['bridge_call_topic'],data)
     
@@ -139,7 +141,8 @@ async def stop_bridge_service(bridge_client,service_id):# stops the service whos
     
     service_data={"service_id":service_id,
           "msg":"IDLE",
-          "condition":None}
+          "condition":None,
+          "expected_reponse":False}
     service_data=json.dumps(service_data)
     bridge_client.publish(publish_topics['bridge_call_topic'],service_data)
 
@@ -150,7 +153,7 @@ async def respond_msg(bridge_client, validation_client, topic:str,msg:str):
         data = json.loads(msg)
     except: return
 
-    if data.get("condition") == "STATUS":
+    if data.get("is_status") == True:
         return
     if topic==subscribe_topics['bridge_call_recv_topic']:
         #Bridge service response
@@ -175,7 +178,8 @@ async def respond_msg(bridge_client, validation_client, topic:str,msg:str):
               
                 data={"service_id":chosen_val_id,
                       "msg":"START",
-                      "condition":None}
+                      "condition":None,
+                      "expected_reponse":False}
                 data=json.dumps(data)
                 validation_client.publish(publish_topics['validation_call_topic'],data)
 
@@ -254,7 +258,8 @@ async def sync_infrastructure_and_boot(bridge_client, validation_client):
             val_topic = publish_topics['validation_call_topic']
             data={"service_id":chosen_id,
                       "msg":"START",
-                      "condition":None}
+                      "condition":None,
+                      "expected_reponse":False}
             data=json.dumps(data)
             validation_client.publish(val_topic, data)
             print(f"Initial start command sent to Validation Service: {chosen_id}")
