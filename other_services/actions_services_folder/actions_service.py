@@ -8,7 +8,7 @@ list_of_tasks=["Alert","Task1","Task2","Task3"]
 list_of_allowed_tasks=["Alert","Task1","Task2"]
 tasks_completed=[]
 
-connection_mqtt=False
+
 
 
 def client_subscribe(actions_topic,client, flags, rc, properties):   
@@ -16,7 +16,6 @@ def client_subscribe(actions_topic,client, flags, rc, properties):
     print(f"Subscribed to topic : {actions_topic}")
 
 def disconnected_from_mqtt(client, packet, exc=None):
-
     print("Disconnected from MQtt")
 
 async def do_tasks(ml_report_topic,client, topic, payload, qos, properties):
@@ -59,9 +58,9 @@ async def main():
     client_id=str(uuid.uuid4())
 
     client=mqtt_client(client_id=client_id)
-    client.on_disconnect=disconnected_from_mqtt
-    client.on_message= partial(do_tasks,ml_report_topic)
-    client.on_connect= partial(client_subscribe,actions_topic)
+    client.on_disconnect = disconnected_from_mqtt
+    client.on_message = partial(do_tasks,ml_report_topic)
+    client.on_connect = partial(client_subscribe,actions_topic)
     await client.connect(host=broker,port=port)
 
     
