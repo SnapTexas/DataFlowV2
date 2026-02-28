@@ -17,6 +17,7 @@ bridge_status_response_calls=[]
 collect_bridge_status_reponse=False
 active_bridge_service_set = set()
 #needs partial
+
 def on_connect(client, flags, rc, properties):
     global subscribe_topics
     for i,j in subscribe_topics.items():
@@ -40,11 +41,11 @@ def get_active_bridge_services(service_data):# gets or updates the result active
         #Removing idle services from set of running services 
         active_bridge_service_set.remove(service_data['service_id'])
 
-async def get_bridge_services_status(client,call_to_bridge_service_topic):# send a msg to all bridge services to respond with status which is collected by worker
+async def get_bridge_services_status(client,call_to_service_topic):# send a msg to all bridge services to respond with status which is collected by worker
     global active_bridge_service_set,thresh_bridge_services,bridge_status_response_calls,collect_bridge_status_reponse
     service_data={"service_id":"ALL","msg":"STATUS","condition":None}
     service_data=json.dumps(service_data)
-    await client.publish(call_to_bridge_service_topic,service_data)
+    client.publish(call_to_service_topic,service_data)
     #For now simply sleep for 10s and then collect whatever the response was 
     flush_bridge_status_list()
     collect_bridge_status_reponse=True
@@ -63,11 +64,11 @@ def flush_bridge_status_list():
 
 
 def choose_service_start(list_of_services):# takes a list of services and returns the first idle if of the first one if there are any else None
-    
-    for service in list_of_services:
-            if service['status'] == "IDLE":
-                return service['id']
-                #activate the first one for now
+    if list_of_services:
+        for service in list_of_services:
+                if service['status'] == "IDLE":
+                    return service['id']
+                    #activate the first one for now
     else:
         return None
             
@@ -84,7 +85,7 @@ def choose_service_stop(list_of_services):# takes a list of services and returns
 async def start_bridge_service(client,service_id): # starts the service whose id is given (Commands to start)
     #Command to start processing messages
     start_service_topic=f"00989800/call_to_bridge_service/{service_id}"
-    await client.publish(start_service_topic,"START")
+    client.publish(start_service_topic,"START")
     
 async def stop_bridge_service(client,service_id):# stops the service whose id is given (Commands to start)
     #Stop means to go idle
@@ -93,7 +94,7 @@ async def stop_bridge_service(client,service_id):# stops the service whose id is
           "msg":"IDLE",
           "condition":None}
     service_data=json.dumps(service_data)
-    await client.publish(start_service_topic,service_data)
+    client.publish(start_service_topic,service_data)
 
 async def verify_bridge_service_call_response(calls_to_bridge_services):# will verify the result of calls made to bridge services 
     pass
@@ -113,13 +114,13 @@ async def respond_msg(client,topic:str,msg:str):
         #Bridge service response
         service_data=json.loads(msg)
         if service_data['condition']=="UNDERLOAD":
-            await get_bridge_services_status(client=client,call_to_bridge_service_topic=publish_topics['bridge_call_topic'])
+            await get_bridge_services_status(client=client,call_to_service_topic=publish_topics['bridge_call_topic'])
             chosen_service_id=choose_service_start(bridge_status_response_calls)
             await start_bridge_service(client,chosen_service_id)  
         elif service_data['condition']=="NORMAL" and service_data['status']!="IDLE":# check if the running services are normal
             #Command One of the service to shut down if there are more than one service running on that topic
             #get list of active services on that topic if there are more than one services active on that topic stop one
-            await get_bridge_services_status(client=client,call_to_bridge_service_topic=publish_topics['validation_call_topic'])
+            await get_bridge_services_status(client=client,call_to_bridge_service_topic=publish_topics['bridge_call_topic'])
             chosen_service_id=choose_service_stop(bridge_status_response_calls)
             await stop_bridge_service(client=client,service_id=chosen_service_id)
             
@@ -128,7 +129,7 @@ async def respond_msg(client,topic:str,msg:str):
         pass
     else:
         pass
-    #await client.publish(topic,msg)
+    #client.publish(topic,msg)
 
 async def worker(client,queue):# checks the queue for incomming calls and sends them to be processed and maintains the set of active bridge services
     while True:
@@ -161,8 +162,8 @@ async def main():
 
     host="31d09ce8b7fa4a92aafc62ae06187541.s1.eu.hivemq.cloud"
     port=8883
-    username=""
-    password=""
+    username="Snappp"
+    password="Snap00989800"
     client_id=str(uuid.uuid4())
     client=mqtt(client_id)
 
