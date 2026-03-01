@@ -204,10 +204,10 @@ async def main():
     #store calls from services
     incomming_calls_queue=asyncio.Queue()
 
-    host="31d09ce8b7fa4a92aafc62ae06187541.s1.eu.hivemq.cloud"
+    host="broker-addr"
     port=8883
-    username="Snappp"
-    password="Snap00989800"
+    username="username"
+    password="password"
     ssl_ctx = ssl.create_default_context()
 
     # --- Client 1: Bridge Manager ---
