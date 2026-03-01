@@ -56,10 +56,10 @@ def go_idle():
 async def main():
     
     
-    host="31d09ce8b7fa4a92aafc62ae06187541.s1.eu.hivemq.cloud"
-    port=8883
-    username="Snappp"
-    password="Snap00989800"
+    host="broker-addr"
+    port=0000
+    username="username"
+    password="password"
     ssl_ctx = ssl.create_default_context()
 
     client=mqtt(service_id)
