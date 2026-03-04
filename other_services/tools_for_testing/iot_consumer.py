@@ -6,7 +6,7 @@ from functools import partial
 
 # Topic Structure: $share/GROUP_NAME/TOPIC
 # The broker will distribute messages among all scripts using this group name
-TOPIC_TO_CONSUME = "iot-data-pipeline-v2/00989800/ml-report"
+TOPIC_TO_CONSUME = "00989800/123"
 
 def on_connect(client, flags, rc, properties):
     print(f"✅ Consumer Connected (RC: {rc})")

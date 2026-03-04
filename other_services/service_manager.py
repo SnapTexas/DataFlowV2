@@ -161,7 +161,7 @@ async def respond_msg(bridge_client, validation_client, topic:str,msg:str):
             await get_bridge_services_status(bridge_client=bridge_client)
             chosen_service_id=choose_service_start(bridge_status_response_calls)
             await start_bridge_service(bridge_client,chosen_service_id)  
-        elif data.get('condition')=="NORMAL" and data.get('status')!="IDLE":# check if the running services are normal
+        elif data.get('condition')=="NORMAL" and data.get('status')!="IDLE" and active_bridge_service_set>thresh_bridge_services:# check if the running services are normal
             #Command One of the service to shut down if there are more than one service running on that topic
             #get list of active services on that topic if there are more than one services active on that topic stop one
             await get_bridge_services_status(bridge_client=bridge_client)
@@ -222,7 +222,7 @@ async def sync_infrastructure_and_boot(bridge_client, validation_client):
         # 1. Trigger fresh status sweep
         await asyncio.gather(
             get_bridge_services_status(bridge_client),
-            get_validation_services_status(validation_client)
+            #get_validation_services_status(validation_client)
         )
         
         # Check how many services total (IDLE or RUNNING) responded
@@ -230,7 +230,7 @@ async def sync_infrastructure_and_boot(bridge_client, validation_client):
         val_found = len(validation_status_response_calls)
 
         # We wait until we see at least the minimum required services online
-        if bridge_found >= thresh_bridge_services and val_found >= thresh_validation_services:
+        if bridge_found >= thresh_bridge_services :# for now removed validation and val_found >= thresh_validation_services:
             print(f"SUCCESS: Infrastructure ready. Found {bridge_found} Bridges and {val_found} Validations.")
             break
         
@@ -243,8 +243,10 @@ async def sync_infrastructure_and_boot(bridge_client, validation_client):
 
     # 1. Bridge Scaling Check
     if len(active_bridge_service_set) < thresh_bridge_services:
+        
         chosen_id = choose_service_start(bridge_status_response_calls)
         if chosen_id:
+            print("called some bridge service to start")
             await start_bridge_service(bridge_client, chosen_id)
         elif bridge_found == 0:
             print("WARNING: No Bridge services responded. Check connections.")
