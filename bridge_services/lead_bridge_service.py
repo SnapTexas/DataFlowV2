@@ -10,7 +10,7 @@ from aiokafka.errors import KafkaConnectionError, RequestTimedOutError, NodeNotR
 
 import os
 import dotenv
-current_status="RUNNING"
+current_status="IDLE"
 current_condition="NORMAL"
 
 # Internal Docker names
@@ -18,7 +18,7 @@ BOOTSTRAP_SERVERS = 'kafka-1:9092,kafka-2:9092'
 TOPIC_NAME = 'test-topic'
 
 #service_id for taling to manger and service_id2 for tallking with data client
-service_id=str(uuid.uuid4())
+service_id="46b01876-f798-46b9-904e-c33623f0b593"# for now setting it to const
 service_id2=str(uuid.uuid4())
 print("For Manager",service_id)
 print("For Worker",service_id2)
@@ -46,7 +46,7 @@ def on_connect(client,flags, rc, properties):# subscribe to manager
         print()
 
 def on_subscribe(client, mid, qos, properties):#conifrm subscription
-    print("subscription confirmed!!!")
+    print("subscribed to manager topic!!!")
     print()
 
 def on_disconnet():# diconnected INFO
@@ -59,9 +59,10 @@ def on_disconnet():# diconnected INFO
 async def subscribe_to_data_topic(client,flags, rc, properties,data_topic=None):
     if data_topic is None:
         data_topic=data_subscribe_topic['data_topic']
-    await client.subscribe(data_topic)
+    client.subscribe(data_topic)
     print(f"Subscribed to topic {data_topic}")
-    
+
+
 def on_disconnet_data_client():
     print("Disconnected ffrom data client")
 
@@ -78,17 +79,21 @@ async def send_status_response(client):
     call_manager(client,msg=data)
 
 async def respond_to_manager(client, topic, payload, qos, properties):
+    global current_status
     msg_from_manager=payload.decode('utf-8')
     data=json.loads(msg_from_manager)
     if data.get('service_id')==service_id:
         print("Got msg from manager!!!")
         msg=data.get('msg')
-        if msg=="START":
-            start_service(client)
-        elif msg=="IDLE":
+        print(msg,current_status)
+        if msg=="START" and current_status=="IDLE":
+            await start_service(client)
+            print("Started Service called")
+        elif msg=="IDLE" and current_status=="RUNNING":
             await go_idle(client)
+            print(" Service go idle called")
         elif msg=="STATUS":
-            send_status_response(client)
+            await send_status_response(client)
         
 def call_manager(client,msg):
     msg=json.dumps(msg)
@@ -128,14 +133,19 @@ async def go_idle(client,data_topic=None):
     print("Disconnecting from kafka")
 
 async def start_service(client,data_topic=None):
-    
+    global current_status
+
     if data_topic is None:
         data_topic=data_subscribe_topic['data_topic']
     try:
-        await client.subscribe(data_topic)
+        
+        client.subscribe(data_topic)
         await start_producer()
+        current_status="RUNNING"
     except Exception as e:
-        print("Exception happended in start service ") 
+        print("Exception happended in start service ")
+        print()
+        print(e) 
     print(f"Subscribed to data Topic:{data_topic}")
     print("Connected to Kafka too ")
 
