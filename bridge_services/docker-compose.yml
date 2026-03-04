@@ -1,0 +1,13 @@
+services:
+  bridge:
+    build: .
+    container_name: mqtt-kafka-bridge
+    networks:
+      - kafka-pipeline  # Use a local alias
+    restart: always
+
+networks:
+  kafka-pipeline:
+    # Use the EXACT name from your 'docker network ls' list
+    external: true
+    name: kafka_cluster_kafka-net
