@@ -20,4 +20,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Run the script (replace 'bridge.py' with your actual filename)
-CMD ["python", "lead_bridge_service.py"]
+CMD ["python","-u", "lead_bridge_service.py"]

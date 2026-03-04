@@ -1,17 +1,13 @@
-version: '3.8'
-
 services:
   bridge:
     build: .
     container_name: mqtt-kafka-bridge
-    restart: always
-    # This ensures the bridge stays in the same network as your Kafka nodes
     networks:
-      - kafka-net
-    depends_on:
-      - kafka-1
-      - kafka-2
+      - kafka-pipeline  # Use a local alias
+    restart: always
 
 networks:
-  kafka-net:
-    external: true # Use this if your Kafka cluster is already running in another compose
+  kafka-pipeline:
+    # Use the EXACT name from your 'docker network ls' list
+    external: true
+    name: kafka_cluster_kafka-net
