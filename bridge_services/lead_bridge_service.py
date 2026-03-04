@@ -45,7 +45,7 @@ def on_connect(client,flags, rc, properties):# subscribe to manager
         print(f"subscribed to {i}:{j}")
         print()
 
-def on_subscribe():#conifrm subscription
+def on_subscribe(client, mid, qos, properties):#conifrm subscription
     print("subscription confirmed!!!")
     print()
 
@@ -65,7 +65,7 @@ async def subscribe_to_data_topic(client,flags, rc, properties,data_topic=None):
 def on_disconnet_data_client():
     print("Disconnected ffrom data client")
 
-def on_subscribe_data_client():
+def on_subscribe_data_client(client, mid, qos, properties):
     print("Subscribed to data client topic")
 
 # ________________________________
