@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  bridge:
+    build: .
+    container_name: mqtt-kafka-bridge
+    restart: always
+    # This ensures the bridge stays in the same network as your Kafka nodes
+    networks:
+      - kafka-net
+    depends_on:
+      - kafka-1
+      - kafka-2
+
+networks:
+  kafka-net:
+    external: true # Use this if your Kafka cluster is already running in another compose

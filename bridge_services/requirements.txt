@@ -1,0 +1,3 @@
+gmqtt==0.6.16
+aiokafka==0.12.0
+python-dotenv==1.0.1

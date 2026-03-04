@@ -107,7 +107,6 @@ def service_under_load_call(client):
  
 #_________________________________
 
-
 # data client functions _________
 async def worker(data_queue):
     while True:
