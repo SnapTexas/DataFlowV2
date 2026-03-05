@@ -5,32 +5,42 @@ import ssl
 from functools import partial
 import json
 from aiokafka import AIOKafkaProducer
-from aiokafka.errors import (KafkaConnectionError, RequestTimedOutError, NodeNotReadyError,ProducerClosed)
-
-
-import os
-import dotenv
-current_status="IDLE"
-current_condition="NORMAL"
+from aiokafka.errors import (KafkaConnectionError, RequestTimedOutError, NodeNotReadyError, ProducerClosed)
+import logging
+import colorlog
 import socket
 
+# --- LOGGING CONFIGURATION ---
+handler = colorlog.StreamHandler()
+handler.setFormatter(colorlog.ColoredFormatter(
+    '%(log_color)s%(levelname)-8s%(reset)s %(blue)s%(message)s',
+    log_colors={
+        'DEBUG':    'cyan',
+        'INFO':     'green',
+        'WARNING':  'yellow',
+        'ERROR':    'red',
+        'CRITICAL': 'red,bg_white',
+    }
+))
+logger = colorlog.getLogger('bridge')
+logger.addHandler(handler)
+logger.setLevel(logging.INFO)
+# -----------------------------
 
-
+current_status="IDLE"
+current_condition="NORMAL"
 
 # Internal Docker names
 BOOTSTRAP_SERVERS = 'kafka-1:9092,kafka-2:9092'
 TOPIC_NAME = 'test-topic'
 
-
-
-
 #service_id for taling to manger and service_id2 for tallking with data client
-service_id=service_id = socket.gethostname()
+service_id = socket.gethostname()
 
-print(f"My Persistent Unique ID is: {service_id}")#"46b01876-f798-46b9-904e-c33623f0b593"# for now setting it to const
+logger.info(f"My Persistent Unique ID is: {service_id}")#"46b01876-f798-46b9-904e-c33623f0b593"# for now setting it to const
 service_id2=str(uuid.uuid4())
-print("For Manager",service_id)
-print("For Worker",service_id2)
+logger.info(f"For Manager: {service_id}")
+logger.info(f"For Worker: {service_id2}")
 
 producer=None
 measure_time=False
@@ -52,10 +62,7 @@ data_subscribe_topic={
     "data_topic":"$share/iot-data-pipeline-v2/00989800/#"
 }
 
-
-
 ID_FILE_PATH = "/app/data/container_id.txt"
-
 
 # _______ manager callbacks ______________
 
@@ -63,48 +70,38 @@ def on_connect(client,flags, rc, properties):# subscribe to manager
     global manager_subscribe_topic
     for i,j in manager_subscribe_topic.items():
         client.subscribe(j)
-        print(f"subscribed to {i}:{j}")
-        print()
+        logger.info(f"subscribed to {i}:{j}")
     send_status_response(client=client)
-    print("Sent status on start")
+    logger.info("Sent status on start")
 
 def on_subscribe(client, mid, qos, properties):#conifrm subscription
-    
-
-    
-    print("subscribed to manager topic!!!")
-    print()
+    logger.info("subscribed to manager topic!!!")
 
 def on_disconnet(client, packet, exc=None):# diconnected INFO
-    print("Diconnected from Broker!!!")
-    print()
+    logger.warning("Disconnected from Broker!!!")
 # ________________________________
 
 #________________data client callbacks_________
 
-
-
 # Assign the wrapper, not the async function directly
-
 
 async def subscribe_to_data_topic(client,flags, rc, properties):
     global data_subscribe_topic
     
     data_topic=data_subscribe_topic['data_topic']
     client.subscribe(data_topic)
-    print(f"Subscribed to topic {data_topic}")
+    logger.info(f"Subscribed to topic {data_topic}")
 
 def start_sub_task(client, flags, rc, properties):
     # This 'schedules' the async work so it actually runs
-    print("Connected to the  data Client!! not subscribed")
+    logger.info("Connected to the  data Client!! not subscribed")
     #asyncio.create_task(subscribe_to_data_topic(client, flags, rc, properties))
 
 def on_disconnet_data_client(client, packet, exc=None):
-    print("Disconnected ffrom data client")
+    logger.warning("Disconnected from data client")
 
 def on_subscribe_data_client(client, mid, qos, properties):
-    
-    print("Subscribed to data client topic")
+    logger.info("Subscribed to data client topic")
 
 # ________________________________
 
@@ -112,43 +109,41 @@ def on_subscribe_data_client(client, mid, qos, properties):
 def send_status_response(client):
     global service_id,current_status,manager_publish_topic
     data={"service_id":service_id,"status":current_status,"condition":current_condition,"is_status":True}
-    print(f"Called manager with msg :{data}")
+    logger.info(f"Called manager with msg :{data}")
     call_manager(client,msg=data)
 
 async def respond_to_manager(client, topic, payload, qos, properties,data_client):
     global current_status
 
-    
     msg_from_manager=payload.decode('utf-8')
     data=json.loads(msg_from_manager)
     if data.get('service_id')==service_id or data.get('service_id')=="ALL":
-        print("Got msg from manager!!!")
+        logger.info("Got msg from manager!!!")
         msg=data.get('msg')
-        print(f"Msg from manager is {msg}")
-        print(f"Current Status is {current_status}")
+        logger.info(f"Msg from manager is {msg}")
+        logger.info(f"Current Status is {current_status}")
         if msg=="START" and current_status=="IDLE":
             await start_service(data_client)
             send_status_response(client)
-            print("Updated manager service started")
-            print("Started Service called")
+            logger.info("Updated manager service started")
+            logger.info("Started Service called")
         elif msg=="IDLE" and current_status=="RUNNING":
             await go_idle(data_client)
-            print(" Service go idle called")
+            logger.info(" Service go idle called")
         elif msg=="STATUS":
             send_status_response(client)
         
 def call_manager(client,msg):
     msg=json.dumps(msg)
     if not client.is_connected:
-        print("NOT CONNECTED TO BROKER")
+        logger.error("NOT CONNECTED TO BROKER")
         return 
     client.publish(manager_publish_topic['to_manager'],msg)
-
 
 def service_under_load_call(client):
     global current_condition,service_id,current_status
     data={"service_id":service_id,"status":current_status,"condition":current_condition,"is_status":False}
-    print("called manager to inform service under laod")
+    logger.warning("called manager to inform service under load")
     call_manager(client,msg=data)
  
 #_________________________________
@@ -166,7 +161,7 @@ async def worker(client,data_queue):
             current_time=asyncio.get_event_loop().time()
             
             await push_data(data)
-            print("Pushing data in Kafka ")
+            logger.info("Pushing data in Kafka")
             data_queue.task_done()
             if overload :
                 if current_condition!="OVERLOAD" or (current_time - last_overload_time) > over_load_cooldown_time:
@@ -179,25 +174,23 @@ async def worker(client,data_queue):
                     if (current_time - last_overload_time) > 10.0:
                         current_condition = "NORMAL"
                         send_status_response(client) # Inform Manager: I am okay now!
-                        print("--- Condition returned to NORMAL. Informing Manager. ---")
+                        logger.info("--- Condition returned to NORMAL. Informing Manager. ---")
     except ProducerClosed:
-        print("Producer was closed, worker stopping push.")
+        logger.warning("Producer was closed, worker stopping push.")
         
     except Exception as e:
-            print(f"Worker Error: {e}")
-
-           
+            logger.error(f"Worker Error: {e}")
 
 async def disconnect_kafka():
     global producer
-    print("Initiating graceful shutdown...")
+    logger.info("Initiating graceful shutdown...")
     await producer.stop() 
-    print("Producer stopped. All buffers flushed.")
+    logger.info("Producer stopped. All buffers flushed.")
 
 async def go_idle(client,data_topic=None):
     global current_status
     if current_status=="IDLE":
-        print("Already IDLE")
+        logger.info("Already IDLE")
         return
     if data_topic is None:
         data_topic=data_subscribe_topic['data_topic']
@@ -205,9 +198,8 @@ async def go_idle(client,data_topic=None):
     client.unsubscribe(data_topic)
     await disconnect_kafka()
     current_status="IDLE"
-    print(f"Going Idle Just Unsubrcibed to the data topic :{data_topic}")
-    print()
-    print("Disconnecting from kafka")
+    logger.info(f"Going Idle Just Unsubscribed to the data topic :{data_topic}")
+    logger.info("Disconnecting from kafka")
 
 async def start_service(client,data_topic=None):
     global current_status
@@ -215,18 +207,16 @@ async def start_service(client,data_topic=None):
     if data_topic is None:
         data_topic=data_subscribe_topic['data_topic']
     try:
-        print("Subscribed to data topic")
+        logger.info("Subscribing to data topic...")
         client.subscribe(data_topic)
-        print("Starting kafka")
+        logger.info("Starting kafka")
         await start_producer()
         current_status="RUNNING"
         
     except Exception as e:
-        print("Exception happended in start service ")
-        print()
-        print(e) 
-    print(f"Subscribed to data Topic:{data_topic}")
-    print("Connected to Kafka too ")
+        logger.error(f"Exception happened in start service: {e}") 
+    logger.info(f"Subscribed to data Topic:{data_topic}")
+    logger.info("Connected to Kafka too ")
 
 def data_rate_limit_check():
     global counter
@@ -242,7 +232,7 @@ def data_rate_limit_check():
     if data_flow_start_time == 0:
         data_flow_start_time = current_time
         counter = 1
-        print("[INIT] Rate limiter started")
+        logger.debug("[INIT] Rate limiter started")
         return False
 
     time_passed = current_time - data_flow_start_time
@@ -250,7 +240,7 @@ def data_rate_limit_check():
     # Window expired → reset
     if time_passed >= time_for_data_rate_limit:
         final_rate = counter / max(time_passed, 0.0001)
-        print(f"[WINDOW RESET] Final rate: {final_rate:.2f} msg/sec")
+        logger.info(f"[WINDOW RESET] Final rate: {final_rate:.2f} msg/sec")
 
         data_flow_start_time = current_time
         counter = 1
@@ -262,11 +252,10 @@ def data_rate_limit_check():
     # 🔥 Only calculate rate after 1 second minimum
     if time_passed >= 1:
         current_rate = counter / time_passed
-        print(f"[RATE] {current_rate:.2f} msg/sec | Count: {counter} | Time: {time_passed:.2f}s")
+        logger.info(f"[RATE] {current_rate:.2f} msg/sec | Count: {counter} | Time: {time_passed:.2f}s")
 
     if counter > data_rate_limit:
-    
-        print("⚠ OVERLOAD DETECTED")
+        logger.warning("⚠ OVERLOAD DETECTED")
         return True
     
     return False
@@ -277,16 +266,16 @@ async def get_data(client, topic, payload, qos, properties,data_queue):#inputs s
         data=payload.decode('utf-8')
         data=json.loads(data)
         await data_queue.put(data)
-        print("Data Inserted InQueue")
+        logger.debug("Data Inserted InQueue")
 
 async def start_producer():
     global producer
     
     # Check if a producer already exists and is running
     if producer is not None:
-        print("Producer already exists. Skipping initialization.")
+        logger.info("Producer already exists. Skipping initialization.")
         return
-    print("created producer obj !!!")
+    logger.info("Creating producer object...")
     producer = AIOKafkaProducer(
         bootstrap_servers=BOOTSTRAP_SERVERS,
         value_serializer=lambda v: json.dumps(v).encode('utf-8'),
@@ -300,15 +289,15 @@ async def start_producer():
     connected = False
     while not connected:
         try:
-            print(f"Attempting to connect to KRaft cluster at {BOOTSTRAP_SERVERS}...")
+            logger.info(f"Attempting to connect to KRaft cluster at {BOOTSTRAP_SERVERS}...")
             await producer.start()
             connected = True
-            print("Successfully connected to Kafka!")
+            logger.info("Successfully connected to Kafka!")
         except KafkaConnectionError:
-            print("Broker not available yet. Retrying in 5 seconds...")
+            logger.warning("Broker not available yet. Retrying in 5 seconds...")
             await asyncio.sleep(5)
         except Exception as e:
-            print(f"Unexpected error: {e}")
+            logger.error(f"Unexpected error: {e}")
             await asyncio.sleep(5)
 
 async def push_data(msg):
@@ -318,22 +307,16 @@ async def push_data(msg):
         try:
             await producer.send_and_wait(TOPIC_NAME, msg)
         except KafkaConnectionError:
-            print("Connection lost! The broker is unreachable.")
+            logger.error("Connection lost! The broker is unreachable.")
             await start_producer()
         except RequestTimedOutError:
-            print("The leader died and no new leader was elected in time.")
+            logger.error("The leader died and no new leader was elected in time.")
     else:
+        logger.warning("Producer is None. Starting Producer...")
         await start_producer()
-        print("producer is None")
-        print("Starting Producer")
 #_____________________________
 
-
-
-
 async def main():
-
-
 
     #Global things
     host="31d09ce8b7fa4a92aafc62ae06187541.s1.eu.hivemq.cloud"
@@ -341,8 +324,6 @@ async def main():
     username="Snappp"
     password="Snap00989800"
     ssl_ctx = ssl.create_default_context()
-
-
 
     # both clients
     client=mqtt(service_id)
@@ -360,23 +341,13 @@ async def main():
         # data client Things 
     data_queue=asyncio.Queue()
 
-   
-    
-
     data_client.set_auth_credentials(username, password)
     data_client.on_connect = start_sub_task
     data_client.on_disconnect = on_disconnet_data_client
     data_client.on_subscribe= on_subscribe_data_client
     data_client.on_message= partial(get_data,data_queue=data_queue)
- 
 
     await data_client.connect(host, port, ssl=ssl_ctx, keepalive=300)
-
-    
-
-
-
-
 
     asyncio.create_task(worker(client=client,data_queue=data_queue))
     await asyncio.Event().wait()
