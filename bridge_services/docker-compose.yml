@@ -1,13 +1,30 @@
+#services:
+#  bridge:
+#    build: .
+#    #container_name: mqtt-kafka-bridge
+#    networks:
+#      - kafka-pipeline  # Use a local alias
+#    restart: always
+
+#networks:
+#  kafka-pipeline:
+#    # Use the EXACT name from your 'docker network ls' list
+#    external: true
+#    name: kafka_cluster_kafka-net
 services:
   bridge:
     build: .
-    #container_name: mqtt-kafka-bridge
+    # Maps the current directory on your host to /app inside the container
+    volumes:
+      - .:/app 
+    # Prevents Python from buffering stdout/stderr (crucial for real-time logs)
+    environment:
+      - PYTHONUNBUFFERED=1
     networks:
-      - kafka-pipeline  # Use a local alias
+      - kafka-pipeline
     restart: always
 
 networks:
   kafka-pipeline:
-    # Use the EXACT name from your 'docker network ls' list
     external: true
     name: kafka_cluster_kafka-net

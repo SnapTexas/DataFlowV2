@@ -12,13 +12,22 @@ import os
 import dotenv
 current_status="IDLE"
 current_condition="NORMAL"
+import socket
+
+
+
 
 # Internal Docker names
 BOOTSTRAP_SERVERS = 'kafka-1:9092,kafka-2:9092'
 TOPIC_NAME = 'test-topic'
 
+
+
+
 #service_id for taling to manger and service_id2 for tallking with data client
-service_id=str(uuid.uuid4())#"46b01876-f798-46b9-904e-c33623f0b593"# for now setting it to const
+service_id=service_id = socket.gethostname()
+
+print(f"My Persistent Unique ID is: {service_id}")#"46b01876-f798-46b9-904e-c33623f0b593"# for now setting it to const
 service_id2=str(uuid.uuid4())
 print("For Manager",service_id)
 print("For Worker",service_id2)
@@ -42,6 +51,12 @@ manager_publish_topic={
 data_subscribe_topic={
     "data_topic":"$share/iot-data-pipeline-v2/00989800/#"
 }
+
+
+
+ID_FILE_PATH = "/app/data/container_id.txt"
+
+
 # _______ manager callbacks ______________
 
 def on_connect(client,flags, rc, properties):# subscribe to manager
@@ -50,8 +65,13 @@ def on_connect(client,flags, rc, properties):# subscribe to manager
         client.subscribe(j)
         print(f"subscribed to {i}:{j}")
         print()
+    send_status_response(client=client)
+    print("Sent status on start")
 
 def on_subscribe(client, mid, qos, properties):#conifrm subscription
+    
+
+    
     print("subscribed to manager topic!!!")
     print()
 
@@ -83,6 +103,7 @@ def on_disconnet_data_client(client, packet, exc=None):
     print("Disconnected ffrom data client")
 
 def on_subscribe_data_client(client, mid, qos, properties):
+    
     print("Subscribed to data client topic")
 
 # ________________________________
@@ -96,6 +117,8 @@ def send_status_response(client):
 
 async def respond_to_manager(client, topic, payload, qos, properties,data_client):
     global current_status
+
+    
     msg_from_manager=payload.decode('utf-8')
     data=json.loads(msg_from_manager)
     if data.get('service_id')==service_id or data.get('service_id')=="ALL":
@@ -319,11 +342,26 @@ async def main():
     password="Snap00989800"
     ssl_ctx = ssl.create_default_context()
 
+
+
+    # both clients
+    client=mqtt(service_id)
+    data_client=mqtt(service_id2)
+
+    #
+    client.set_auth_credentials(username=username, password=password)
+    client.on_connect= on_connect
+    client.on_message = partial(respond_to_manager,data_client=data_client)
+    client.on_disconnect = on_disconnet
+    client.on_subscribe= on_subscribe
+    
+    await client.connect(host=host, port=port, ssl=ssl_ctx, keepalive=300)
+
         # data client Things 
     data_queue=asyncio.Queue()
 
    
-    data_client=mqtt(service_id2)
+    
 
     data_client.set_auth_credentials(username, password)
     data_client.on_connect = start_sub_task
@@ -334,16 +372,7 @@ async def main():
 
     await data_client.connect(host, port, ssl=ssl_ctx, keepalive=300)
 
-    # manager Things
-    client=mqtt(service_id)
-    client.set_auth_credentials(username=username, password=password)
-    client.on_connect= on_connect
-    client.on_message = partial(respond_to_manager,data_client=data_client)
-    client.on_disconnect = on_disconnet
-    client.on_subscribe= on_subscribe
     
-    await client.connect(host=host, port=port, ssl=ssl_ctx, keepalive=300)
-
 
 
 
