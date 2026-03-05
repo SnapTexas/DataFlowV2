@@ -1,7 +1,7 @@
 services:
   bridge:
     build: .
-    container_name: mqtt-kafka-bridge
+    #container_name: mqtt-kafka-bridge
     networks:
       - kafka-pipeline  # Use a local alias
     restart: always

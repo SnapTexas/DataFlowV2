@@ -5,7 +5,7 @@ import ssl
 from functools import partial
 import json
 from aiokafka import AIOKafkaProducer
-from aiokafka.errors import KafkaConnectionError, RequestTimedOutError, NodeNotReadyError
+from aiokafka.errors import (KafkaConnectionError, RequestTimedOutError, NodeNotReadyError,ProducerClosed)
 
 
 import os
@@ -18,7 +18,7 @@ BOOTSTRAP_SERVERS = 'kafka-1:9092,kafka-2:9092'
 TOPIC_NAME = 'test-topic'
 
 #service_id for taling to manger and service_id2 for tallking with data client
-service_id="46b01876-f798-46b9-904e-c33623f0b593"# for now setting it to const
+service_id=str(uuid.uuid4())#"46b01876-f798-46b9-904e-c33623f0b593"# for now setting it to const
 service_id2=str(uuid.uuid4())
 print("For Manager",service_id)
 print("For Worker",service_id2)
@@ -29,6 +29,8 @@ data_flow_start_time=0
 data_rate_limit=10
 time_for_data_rate_limit=5
 counter=1
+over_load_cooldown_time=30
+last_overload_time = 0
 manager_subscribe_topic={
                 "from_manager":"00989800/to_bridge_calls" 
                 }
@@ -114,7 +116,11 @@ async def respond_to_manager(client, topic, payload, qos, properties,data_client
         
 def call_manager(client,msg):
     msg=json.dumps(msg)
+    if not client.is_connected:
+        print("NOT CONNECTED TO BROKER")
+        return 
     client.publish(manager_publish_topic['to_manager'],msg)
+
 
 def service_under_load_call(client):
     global current_condition,service_id,current_status
@@ -126,15 +132,38 @@ def service_under_load_call(client):
 
 # data client functions _________
 async def worker(client,data_queue):
-    while True:
-        data=await data_queue.get()
-        overload=data_rate_limit_check()
-        await push_data(data)
-        print("Pushing data in Kafka ")
-        data_queue.task_done()
-        if overload:
-            service_under_load_call(client=client)
+    global current_condition
+    global last_overload_time
+    global over_load_cooldown_time
+    try:
+        while True:
+            data=await data_queue.get()
             
+            overload=data_rate_limit_check()
+            current_time=asyncio.get_event_loop().time()
+            
+            await push_data(data)
+            print("Pushing data in Kafka ")
+            data_queue.task_done()
+            if overload :
+                if current_condition!="OVERLOAD" or (current_time - last_overload_time) > over_load_cooldown_time:
+                    last_overload_time=current_time
+                    current_condition="OVERLOAD"
+                    service_under_load_call(client=client)
+            else:
+                if current_condition == "OVERLOAD":
+                    # Wait for a "Stability Window" (e.g., 10 seconds of Normal traffic)
+                    if (current_time - last_overload_time) > 10.0:
+                        current_condition = "NORMAL"
+                        send_status_response(client) # Inform Manager: I am okay now!
+                        print("--- Condition returned to NORMAL. Informing Manager. ---")
+    except ProducerClosed:
+        print("Producer was closed, worker stopping push.")
+        
+    except Exception as e:
+            print(f"Worker Error: {e}")
+
+           
 
 async def disconnect_kafka():
     global producer
@@ -178,6 +207,7 @@ async def start_service(client,data_topic=None):
 
 def data_rate_limit_check():
     global counter
+    global current_status
     global data_rate_limit
     global data_flow_start_time
     global time_for_data_rate_limit
@@ -212,9 +242,10 @@ def data_rate_limit_check():
         print(f"[RATE] {current_rate:.2f} msg/sec | Count: {counter} | Time: {time_passed:.2f}s")
 
     if counter > data_rate_limit:
+    
         print("⚠ OVERLOAD DETECTED")
         return True
-
+    
     return False
 
 async def get_data(client, topic, payload, qos, properties,data_queue):#inputs str in queue
@@ -299,9 +330,9 @@ async def main():
     data_client.on_disconnect = on_disconnet_data_client
     data_client.on_subscribe= on_subscribe_data_client
     data_client.on_message= partial(get_data,data_queue=data_queue)
+ 
 
-
-    await data_client.connect(host, port, ssl=ssl_ctx)
+    await data_client.connect(host, port, ssl=ssl_ctx, keepalive=300)
 
     # manager Things
     client=mqtt(service_id)
@@ -310,7 +341,8 @@ async def main():
     client.on_message = partial(respond_to_manager,data_client=data_client)
     client.on_disconnect = on_disconnet
     client.on_subscribe= on_subscribe
-    await client.connect(host=host, port=port, ssl=ssl_ctx)
+    
+    await client.connect(host=host, port=port, ssl=ssl_ctx, keepalive=300)
 
 
 
