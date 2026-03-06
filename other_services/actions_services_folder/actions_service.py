@@ -1,80 +1,56 @@
-
-import  uuid
+import uuid
 from gmqtt import Client as mqtt_client
 from functools import partial
 import asyncio
+import ssl
+import socket
 
-list_of_tasks=["Alert","Task1","Task2","Task3"]
-list_of_allowed_tasks=["Alert","Task1","Task2"]
-tasks_completed=[]
+# --- CONFIGURATION ---
+list_of_allowed_tasks = ["Alert", "Task1", "Task2"]
+tasks_completed = []
+service_id = socket.gethostname()
 
-
-
-
-def client_subscribe(actions_topic,client, flags, rc, properties):   
+def client_subscribe(actions_topic, client, flags, rc, properties):   
     client.subscribe(actions_topic)
-    print(f"Subscribed to topic : {actions_topic}")
+    print(f"Actions Service {service_id} subscribed to: {actions_topic}")
 
-def disconnected_from_mqtt(client, packet, exc=None):
-    print("Disconnected from MQtt")
-
-async def do_tasks(ml_report_topic,client, topic, payload, qos, properties):
-    if len(payload)>0:
-        task=payload.decode('utf-8')
+async def do_tasks(ml_report_topic, client, topic, payload, qos, properties):
+    if len(payload) > 0:
+        task = payload.decode('utf-8')
         if task in list_of_allowed_tasks:
-            print(f"Doing {task} ...")
-            await asyncio.sleep(2)  # Simulate time taken to do the task
-            await update_task_done(client=client,task=task,ml_report_topic=ml_report_topic)
+            print(f">>> Action Triggered: Doing {task}...")
+            await asyncio.sleep(2)  # Simulate hardware/task delay
+            
+            tasks_completed.append(task)
+            report = f"ID: {service_id} | Task {task} completed. History: {tasks_completed}"
+            
+            client.publish(ml_report_topic, report)
+            print(f"Sent completion report to ML Service.")
         else:
-            report=task_not_done("Invalid permission")
-            send_task_report_to_ml_service(client,report,topic=ml_report_topic)
-
-async def update_task_done(client,task,ml_report_topic):
-    await asyncio.sleep(1)  # Simulate time taken to update the task status
-    print(f"Task {task} is done!")
-    tasks_completed.append(task)
-    report = task_report(task)
-    send_task_report_to_ml_service(client,report=report,topic=ml_report_topic)
-
-def task_not_done(reason):
-    global list_of_allowed_tasks
-    return f"Task not done reason:{reason} , look at allowed tasks {list_of_allowed_tasks}"
-
-def task_report(task):
-    #send tasks completed to ml service 
-    report = f"Report: {task} is completed, tasks completed till now :{tasks_completed}"
-    return report
-
-def send_task_report_to_ml_service(client,report,topic):
-    client.publish(topic,report)
-    print("Task Report Sent...")
+            reason = f"Permission Denied for {task}"
+            client.publish(ml_report_topic, f"Error: {reason}")
 
 async def main():
-    print("Running...")
-    broker="broker.hivemq.com"
-    port=1883
-    actions_topic="$share/iot-data-pipeline-v2/00989800/actions"
-    ml_report_topic="iot-data-pipeline-v2/00989800/ml-report"
-    client_id=str(uuid.uuid4())
-
-    client=mqtt_client(client_id=client_id)
-    client.on_disconnect = disconnected_from_mqtt
-    client.on_message = partial(do_tasks,ml_report_topic)
-    client.on_connect = partial(client_subscribe,actions_topic)
+    # HiveMQ Cloud Details
+    host = "31d09ce8b7fa4a92aafc62ae06187541.s1.eu.hivemq.cloud"
+    port = 8883
+    username = "Snappp"
+    password = "Snap00989800"
     
-    await client.connect(host=broker,port=port)
-
+    actions_topic = "$share/iot-data-pipeline-v2/00989800/actions"
+    ml_report_topic = "00989800/ml-report"
     
+    ssl_ctx = ssl.create_default_context()
 
-
-
+    client = mqtt_client(client_id=service_id)
+    client.set_auth_credentials(username, password)
     
-
+    client.on_connect = partial(client_subscribe, actions_topic)
+    client.on_message = partial(do_tasks, ml_report_topic)
     
+    print(f"Connecting Actions Service {service_id} to HiveMQ...")
+    await client.connect(host, port, ssl=ssl_ctx)
     await asyncio.Event().wait()
 
-if __name__=="__main__":
+if __name__ == "__main__":
     asyncio.run(main())
-
-
-

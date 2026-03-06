@@ -279,10 +279,9 @@ async def start_producer():
     producer = AIOKafkaProducer(
         bootstrap_servers=BOOTSTRAP_SERVERS,
         value_serializer=lambda v: json.dumps(v).encode('utf-8'),
-        # 'all' ensures data is replicated to both brokers before confirming
-        acks='all',
-        # Retry settings for internal library resilience
-        retry_backoff_ms=500 
+        acks=0,
+        max_batch_size=65536,
+        linger_ms=10
     )
 
     # --- CONNECTION LOGIC ---

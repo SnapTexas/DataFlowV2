@@ -1,0 +1,20 @@
+services:
+  actions:
+    build: .
+    # Use the specific script name you provided earlier
+    command: ["python", "-u", "service_manager.py"]
+    volumes:
+      - .:/app 
+    environment:
+      - PYTHONUNBUFFERED=1
+    # We use 'bridge' (default) instead of your external 'kafka-pipeline'
+    networks:
+      - actions-net
+    restart: always
+
+networks:
+  actions-net:
+    driver: bridge
+
+
+    ##DataFlow-V2

@@ -107,12 +107,13 @@ def update_active_services(service_data,type):# gets or updates the result activ
     except Exception as e:
         print("update active bridge service failed",e)
 
-async def get_bridge_services_status(bridge_client,type):# send a msg to all bridge services to respond with status which is collected by worker
+async def get_services_status(client,type):# send a msg to all bridge services to respond with status which is collected by worker
     
-    global active_bridge_service_set,thresh_bridge_services,bridge_status_response_calls,collect_bridge_status_reponse
+    data=assign_stuff_based_on_type(type=type)
+    call_topic=data['call_topic']
     service_data={"service_id":"ALL","msg":"STATUS","condition":None,"expected_reponse":True}
     service_data=json.dumps(service_data)
-    bridge_client.publish(publish_topics['bridge_call_topic'],service_data)
+    client.publish(call_topic,service_data)
     #For now simply sleep for 10s and then collect whatever the response was 
     
 
@@ -120,12 +121,7 @@ async def get_bridge_services_status(bridge_client,type):# send a msg to all bri
 
 # Helper for Validation status check
 async def get_validation_services_status(validation_client):#DONE
-    global validation_status_response_calls,collect_validation_status_response
-    service_data={"service_id":"ALL","msg":"STATUS","condition":None,"expected_reponse":True}
-    service_data=json.dumps(service_data)
-    validation_client.publish(publish_topics['validation_call_topic'],service_data)
-
-
+    pass
 
 
 def collect_validation_service_status_response(data):
@@ -181,7 +177,7 @@ async def stop_service_procedure(client,type):
 
 
         if len(active_set)>threshold:
-        #await get_bridge_services_status(bridge_client=bridge_client)
+        #await get_services_status(bridge_client=bridge_client,type=bridge_type)
             chosen_service_id=choose_service_stop(active_services_set=active_set)
             if chosen_service_id is None:
                 raise Exception("Choose Service ID was None")
@@ -264,7 +260,7 @@ async def respond_msg(bridge_client, validation_client, topic:str,msg:str):
         #Bridge service response
         if msg.get('condition')=="OVERLOAD" :
             print("Underload safety triggered")
-            await get_bridge_services_status(bridge_client=bridge_client)
+            await get_services_status(bridge_client=bridge_client,type=bridge_type)
             chosen_service_id=choose_service_start(idle_services_set=idle_bridge_services_set,type=bridge_type)
             if chosen_service_id is not None:
                 start_service(bridge_client,chosen_service_id,type=bridge_type)
@@ -283,7 +279,7 @@ async def respond_msg(bridge_client, validation_client, topic:str,msg:str):
             return 
         if msg.get('condition')=="OVERLOAD":
             print("Validation Underload detected!")
-            await get_validation_services_status(validation_client)
+            await get_services_status(validation_client,type=validation_type)
             chosen_val_id = choose_service_start(idle_services_set=idle_validation_services_set,type=validation_type)
             if chosen_val_id is not None:
               
@@ -294,7 +290,7 @@ async def respond_msg(bridge_client, validation_client, topic:str,msg:str):
         elif msg.get('condition')=="NORMAL" and msg.get('status')!="IDLE" and len(active_validation_service_set)>thresh_validation_services:# check if the running services are normal
             #Command One of the service to shut down if there are more than one service running on that topic
             #get list of active services on that topic if there are more than one services active on that topic stop one
-            await stop_service_procedure(bridge_client,type=validation_type)
+            await stop_service_procedure(validation_client,type=validation_type)
 
 async def worker(bridge_client, validation_client, queue):#DONE# checks the queue for incomming calls and sends them to be processed and maintains the set of active bridge services
     print("Worker Called")
@@ -354,13 +350,13 @@ async def sync_infrastructure_and_boot(bridge_client, validation_client):#DONE
     while True:
         # 1. Trigger fresh status sweep
         await asyncio.gather(
-            get_bridge_services_status(bridge_client),
-            get_validation_services_status(validation_client)
+            get_services_status(bridge_client,type=bridge_type),
+            get_services_status(validation_client,type=validation_type)
         )
         
         # Check how many services total (IDLE or RUNNING) responded
         bridge_found = len(active_bridge_service_set)
-        print("Active Bridge Services set:",active_validation_service_set)
+        print("Active Bridge Services set:",active_bridge_service_set)
         print("IDLE Brridge services set:",idle_bridge_services_set)
         val_found = len(active_validation_service_set)
 

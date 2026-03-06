@@ -1,0 +1,15 @@
+services:
+  validation:
+    build: .  # This will now look for the file named 'Dockerfile'
+    volumes:
+      - .:/app 
+    environment:
+      - PYTHONUNBUFFERED=1
+    networks:
+      - kafka-pipeline
+    restart: always
+
+networks:
+  kafka-pipeline:
+    external: true
+    name: kafka_cluster_kafka-net

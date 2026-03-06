@@ -18,4 +18,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Default command (can be overridden by docker-compose)
-CMD ["python", "-u", "actions_service.py"]
+CMD ["python", "-u", "service_manager.py"]
