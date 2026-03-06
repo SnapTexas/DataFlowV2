@@ -16,10 +16,10 @@ publish_topics={
 thresh_bridge_services=1# how many bridge services should run on default
 thresh_validation_services=1
 
+bridge_type="bridge"
+validation_type="validation"
 
-# Separate response lists for Bridge and Validation
-bridge_status_response_calls=asyncio.Queue()
-validation_status_response_calls=[]
+
 
 collect_bridge_status_reponse=False
 collect_validation_status_response = False
@@ -47,12 +47,40 @@ async def on_message(bridge_client, topic, payload, qos, properties,incomming_ca
     service_data=json.dumps(service_data)
     await incomming_calls_queue.put(service_data)
 
+def assign_stuff_based_on_type(type):
+    global thresh_bridge_services,thresh_validation_services
+    global active_bridge_service_set,active_validation_service_set
+    global idle_bridge_services_set,idle_validation_services_set
+    global publish_topics,subscribe_topics
+    if type==bridge_type:
+        threshold=thresh_bridge_services
+        active_set=active_bridge_service_set
+        idle_set=idle_bridge_services_set
+        call_topic=publish_topics["bridge_call_topic"]
+        call_recv_topic=subscribe_topics['bridge_call_recv_topic']
 
+    elif type==validation_type:
+        threshold=thresh_validation_services
+        active_set=active_validation_service_set
+        idle_set=idle_validation_services_set
+        call_topic=publish_topics["validation_call_topic"]
+        call_recv_topic=subscribe_topics['validation_call_recv_topic']
+    else:
+        raise Exception("Invalid Type assign_stuuf fun")
+    
+    data={"active_set":active_set,
+          "idle_set":idle_set,
+          "threshold":threshold,
+          "call_topic":call_topic,
+          "call_recv_topic":call_recv_topic}
+    return data
+    
 
-def update_active_bridge_services(service_data):# gets or updates the result active bridge services set #WORKING HERE CONTINUE CREATE A FUN FOR ASSIGNING BASED ON TYPE AND MAKE 2 FUNCTIONS IN ONE
-    global active_bridge_service_set,idle_bridge_services_set
-    global active_validation_service_set,idle_validation_services_set
-    print("Update active bridge service was called")
+def update_active_services(service_data,type):# gets or updates the result active bridge services set #WORKING HERE CONTINUE CREATE A FUN FOR ASSIGNING BASED ON TYPE AND MAKE 2 FUNCTIONS IN ONE
+    data=assign_stuff_based_on_type(type=type)
+    active_set=data['active_set']
+    idle_set=data['idle_set']
+    print(f"Update active {type} service was called")
     try:
         
         #service_data=json.loads(service_data)
@@ -62,52 +90,25 @@ def update_active_bridge_services(service_data):# gets or updates the result act
         condition= service_data.get('condition')
         if status=="RUNNING" and is_status==True:
             #Adding to set of running services 
-            active_bridge_service_set.add(service_id)
-            idle_bridge_services_set.discard(service_id)
+            active_set.add(service_id)
+            idle_set.discard(service_id)
             print("Added a service")
-            print(f"Active bridge set updated cuurent active service :{len(active_bridge_service_set)}")
+            print(f"Active bridge set updated cuurent active service :{len(active_set)}")
         
 
         elif status=="IDLE" and is_status==True:
             #Removing idle services from set of running services
-            active_bridge_service_set.discard(service_id)
-            idle_bridge_services_set.add(service_id)
+            active_set.discard(service_id)
+            idle_set.add(service_id)
             print("Removed a service")
-            print(f"Active bridge set updated cuurent active service :{len(active_bridge_service_set)}")
+            print(f"Active bridge set updated cuurent active service :{len(active_set)}")
             print()
-            print(f"Added to idle bridge services set : {len(idle_bridge_services_set)}")
+            print(f"Added to idle bridge services set : {len(idle_set)}")
     except Exception as e:
         print("update active bridge service failed",e)
-def update_active_validation_services(service_data):# gets or updates the result active bridge services set 
-    global active_validation_service_set,idle_validation_services_set
-    print("Update active validation service was called")
-    try:
-        
-        #service_data=json.loads(service_data)
-        status = service_data.get("status")
-        is_status = service_data.get("is_status")
-        service_id = service_data.get("service_id")
-        condition= service_data.get('condition')
-        if status=="RUNNING" and is_status==True:
-            #Adding to set of running services 
-            active_validation_service_set.add(service_id)
-            idle_validation_services_set.discard(service_id)
-            print("Added a validation service")
-            print(f"Active validation set updated cuurent active service :{len(active_validation_service_set)}")
-        
 
-        elif status=="IDLE" and is_status==True:
-            #Removing idle services from set of running services
-            active_bridge_service_set.discard(service_id)
-            idle_validation_services_set.add(service_id)
-            print("Removed a service")
-            print(f"Active validation set updated cuurent active service :{len(active_validation_service_set)}")
-            print()
-            print(f"Added to idle validation services set : {len(idle_validation_services_set)}")
-    except Exception as e:
-        print("update active validation service failed",e)
-
-async def get_bridge_services_status(bridge_client):# send a msg to all bridge services to respond with status which is collected by worker
+async def get_bridge_services_status(bridge_client,type):# send a msg to all bridge services to respond with status which is collected by worker
+    
     global active_bridge_service_set,thresh_bridge_services,bridge_status_response_calls,collect_bridge_status_reponse
     service_data={"service_id":"ALL","msg":"STATUS","condition":None,"expected_reponse":True}
     service_data=json.dumps(service_data)
@@ -144,7 +145,7 @@ def choose_service_start(idle_services_set,type):# takes a list of services and 
         return None
 def choose_service_stop(active_services_set):# takes a list of services and returns the first running service if there are more than one else None
     try:
-        if not active_bridge_service_set: 
+        if not active_services_set: 
             return None
         return active_services_set.pop()
     except Exception as e:
@@ -152,7 +153,6 @@ def choose_service_stop(active_services_set):# takes a list of services and retu
         print("Number of services in idle ", type,"set:",len(active_services_set))
         return None
     
-
 def start_service(client,service_id,type): # starts the service whose id is given (Commands to start)
     #Command to start processing messages
     print(f"start bridge service called for {service_id} ,type={type}")
@@ -163,7 +163,7 @@ def start_service(client,service_id,type): # starts the service whose id is give
           "expected_reponse":False
           }
     data=json.dumps(data)
-    if type=="bridge":
+    if type==bridge_type:
         client.publish(publish_topics['bridge_call_topic'],data)
     else:
         client.publish(publish_topics['validation_call_topic'],data)
@@ -172,18 +172,13 @@ def start_service(client,service_id,type): # starts the service whose id is give
 
 
 async def stop_service_procedure(client,type):
-    global  active_bridge_service_set,thresh_bridge_services
-    global  active_validation_service_set,thresh_validation_services
-    try:
-        if type=="bridge":
-            active_set=active_bridge_service_set
-            threshold=thresh_bridge_services
-        elif type=="validation":
-            active_set=active_validation_service_set
-            threshold=thresh_validation_services
-        else:
-            raise Exception("type of service not defined , happend in stop_service_procedure")
     
+    try:
+        data=assign_stuff_based_on_type(type=type)
+        active_set=data.get('active_set')
+        threshold=data.get('threshold')
+        call_topic=data.get('call_topic')
+
 
         if len(active_set)>threshold:
         #await get_bridge_services_status(bridge_client=bridge_client)
@@ -191,63 +186,62 @@ async def stop_service_procedure(client,type):
             if chosen_service_id is None:
                 raise Exception("Choose Service ID was None")
             else:
-                await stop_service(client=client,service_id=chosen_service_id)
+                await stop_service(client=client,service_id=chosen_service_id,call_topic=call_topic)
     except Exception as e:
         print("Exception happend IN stopping bridge service")
 
-async def stop_service(client,service_id):# stops the service whose id is given (Commands to start)
+async def stop_service(client,service_id,call_topic):# stops the service whose id is given (Commands to start)
     #Stop means to go idle
-    print(f"stop bridge service called for {service_id}")
+    print(f"stop service called for {service_id} on topic {call_topic}")
     
     service_data={"service_id":service_id,
           "msg":"IDLE",
           "condition":None,
           "expected_reponse":False}
     service_data=json.dumps(service_data)
-    client.publish(publish_topics['bridge_call_topic'],service_data)
+    client.publish(call_topic,service_data)
 
 
 
 def check_service_is_ok_now(status,condition,type):
-    global thresh_bridge_services,thresh_validation_services
-    global active_bridge_service_set,active_validation_service_set
-    if type=="bridge":
-        threshold=thresh_bridge_services
-        active_set=active_bridge_service_set
-    elif type=="validation":
-        threshold=thresh_validation_services
-        active_set=active_validation_service_set
+    try:
+        data=assign_stuff_based_on_type(type=type)
+        active_set=data['active_set']
+        threshold=data['threshold']
+    
+        if  status=="RUNNING" and condition =="NORMAL" :
+            if len(active_set)>threshold:
+                return "OK"
+    except Exception as e:
+        print("Hey exception heppend when checking service is ok")
+        print("Exception:",e)
+        return None
 
-    if  status=="RUNNING" and condition =="NORMAL" :
-        if len(active_set)>threshold:
-            return "OK"
-    return None
-
-async def status_response(bridge_client,msg,topic):
-    global active_bridge_service_set,thresh_bridge_services
+async def status_response(client,msg,topic):#DONE
+    
     if msg.get('is_status') == True:
         status=msg.get('status')
         condition=msg.get('condition')
         print("Status response recieved ",end='')
         # Route to correct active set management
         if topic == subscribe_topics['bridge_call_recv_topic']:
-            service_status_call_back=check_service_is_ok_now(status,condition,type="bridge")
+            service_status_call_back=check_service_is_ok_now(status,condition,type=bridge_type)
             if service_status_call_back =="OK":
                 print("SToppping BRIDGE SERVICE called from status_response")
-                await stop_service_procedure(bridge_client,type="bridge")
+                await stop_service_procedure(client,type=bridge_type)
             else:
-                update_active_bridge_services(msg)
+                update_active_services(msg,type=bridge_type)
                 print("from Bridge service")
                 print("Update active bridge service called with msg",msg)
             
         else:
                 #needs tobe  updated
-            service_status_call_back=check_service_is_ok_now(status,condition,type="validation")
+            service_status_call_back=check_service_is_ok_now(status,condition,type=validation_type)
             if service_status_call_back =="OK":
                 print("SToppping Validation SERVICE called from status_response")
-                await stop_service_procedure(bridge_client,type="bridge")
+                await stop_service_procedure(client,type=validation_type)
             else:
-                update_active_bridge_services(msg)
+                update_active_services(msg,type=validation_type)
                 print("from validation service")
                 print("Update active validation service called with msg",msg)
         return True
@@ -256,6 +250,7 @@ async def status_response(bridge_client,msg,topic):
 async def respond_msg(bridge_client, validation_client, topic:str,msg:str):
     global active_bridge_service_set,  idle_bridge_services_set
     global active_validation_service_set, idle_validation_services_set
+    global thresh_bridge_services,thresh_validation_services
     print("Respond to msg called by worker")
     # 1. Parse once at the top
     
@@ -264,21 +259,22 @@ async def respond_msg(bridge_client, validation_client, topic:str,msg:str):
     if topic==subscribe_topics['bridge_call_recv_topic']:
         is_status_response=await status_response(bridge_client,msg=msg,topic=topic)
         if is_status_response==True:
+            print("Respond_msg has responded to status response and returned")
             return 
         #Bridge service response
         if msg.get('condition')=="OVERLOAD" :
             print("Underload safety triggered")
             await get_bridge_services_status(bridge_client=bridge_client)
-            chosen_service_id=choose_service_start(idle_services_set=idle_bridge_services_set,type="bridge")
+            chosen_service_id=choose_service_start(idle_services_set=idle_bridge_services_set,type=bridge_type)
             if chosen_service_id is not None:
-                start_service(bridge_client,chosen_service_id,type="bridge")
+                start_service(bridge_client,chosen_service_id,type=bridge_type)
             else:
                 print("NO CHOSEN SERVICE ID DUE TO EMPTY IDLE LIST ")
 
         elif msg.get('condition')=="NORMAL" and msg.get('status')!="IDLE" and len(active_bridge_service_set)>thresh_bridge_services:# check if the running services are normal
             #Command One of the service to shut down if there are more than one service running on that topic
             #get list of active services on that topic if there are more than one services active on that topic stop one
-            await stop_service_procedure(bridge_client,type="bridge")
+            await stop_service_procedure(bridge_client,type=bridge_type)
            
     elif topic==subscribe_topics['validation_call_recv_topic']:
         #Validations service response
@@ -288,19 +284,19 @@ async def respond_msg(bridge_client, validation_client, topic:str,msg:str):
         if msg.get('condition')=="OVERLOAD":
             print("Validation Underload detected!")
             await get_validation_services_status(validation_client)
-            chosen_val_id = choose_service_start(idle_services_set=idle_validation_services_set,type="validation")
+            chosen_val_id = choose_service_start(idle_services_set=idle_validation_services_set,type=validation_type)
             if chosen_val_id is not None:
               
-                start_service(validation_client,service_id=chosen_val_id,type="validation")
+                start_service(validation_client,service_id=chosen_val_id,type=validation_type)
             else:
                 print("NO CHOSEN SERVICE ID DUE TO EMPTY IDLE LIST ")
-
-        elif msg.get('condition')=="NORMAL" and msg.get('status')!="IDLE" and len(active_bridge_service_set)>thresh_bridge_services:# check if the running services are normal
+        #Maybe we can remove this part Ill see
+        elif msg.get('condition')=="NORMAL" and msg.get('status')!="IDLE" and len(active_validation_service_set)>thresh_validation_services:# check if the running services are normal
             #Command One of the service to shut down if there are more than one service running on that topic
             #get list of active services on that topic if there are more than one services active on that topic stop one
-            await stop_service_procedure(bridge_client,type="bridge")
+            await stop_service_procedure(bridge_client,type=validation_type)
 
-async def worker(bridge_client, validation_client, queue):# checks the queue for incomming calls and sends them to be processed and maintains the set of active bridge services
+async def worker(bridge_client, validation_client, queue):#DONE# checks the queue for incomming calls and sends them to be processed and maintains the set of active bridge services
     print("Worker Called")
     global active_bridge_service_set,idle_bridge_services_set
     global active_validation_service_set,idle_validation_services_set
@@ -329,12 +325,12 @@ def on_subscribe(client, mid, qos, properties,type):# just prints subscribed use
     print(f"subscribed to topics of type {type}")#DONE
 
 async def start_procedure(bridge_client,validation_client,bridge_found,val_found):#Done
-    chosen_id_bridge = choose_service_start(idle_bridge_services_set,type="bridge")
-    chosen_id_validation =choose_service_start(idle_validation_services_set,type="validation")
+    chosen_id_bridge = choose_service_start(idle_bridge_services_set,type=bridge_type)
+    chosen_id_validation =choose_service_start(idle_validation_services_set,type=validation_type)
     if chosen_id_bridge is not None and chosen_id_validation is not None:
         print("called some bridge service to start")
-        start_service(client=bridge_client, service_id=chosen_id_bridge,type="bridge")
-        start_service(client=validation_client,service_id=chosen_id_validation,type="validation")
+        start_service(client=bridge_client, service_id=chosen_id_bridge,type=bridge_type)
+        start_service(client=validation_client,service_id=chosen_id_validation,type=validation_type)
 
         print("Commanded both service to stop")
     elif bridge_found == 0 or val_found==0:
@@ -366,7 +362,7 @@ async def sync_infrastructure_and_boot(bridge_client, validation_client):#DONE
         bridge_found = len(active_bridge_service_set)
         print("Active Bridge Services set:",active_validation_service_set)
         print("IDLE Brridge services set:",idle_bridge_services_set)
-        val_found = len(validation_status_response_calls)
+        val_found = len(active_validation_service_set)
 
         # We wait until we see at least the minimum required services online
         if bridge_found >= thresh_bridge_services  and val_found >= thresh_validation_services:
@@ -377,7 +373,7 @@ async def sync_infrastructure_and_boot(bridge_client, validation_client):#DONE
             print(f"Number of Bridge Service: {bridge_found}")
             print("We dont have required amount of them so trying to start more ")
             
-            await start_procedure(bridge_found=bridge_client,
+            await start_procedure(bridge_client=bridge_client,
                             validation_client=validation_client,
                             bridge_found=bridge_found,
                             val_found=val_found)
@@ -400,7 +396,7 @@ async def main():
     bridge_client.on_connect=on_connect
     bridge_client.on_message = partial(on_message,incomming_calls_queue=incomming_calls_queue)
     bridge_client.on_disconnect = on_disconnect
-    bridge_client.on_subscribe=partial(on_subscribe,type="bridge")
+    bridge_client.on_subscribe=partial(on_subscribe,type=bridge_type)
     await bridge_client.connect(host=host, port=port, ssl=ssl_ctx)
 
     # --- Client 2: Validation Manager ---
@@ -409,7 +405,7 @@ async def main():
     validation_client.on_connect= on_connect_validation
     validation_client.on_message = partial(on_message,incomming_calls_queue=incomming_calls_queue)
     validation_client.on_disconnect = on_disconnect
-    validation_client.on_subscribe=partial(on_subscribe,type="validation")
+    validation_client.on_subscribe=partial(on_subscribe,type=validation_type)
     await validation_client.connect(host=host, port=port, ssl=ssl_ctx)
 
     
