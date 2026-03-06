@@ -28,10 +28,7 @@ idle_bridge_services_set = set()
 active_validation_service_set = set()
 idle_validation_services_set = set()
 
-# Timestamps to detect crashed containers
 service_last_seen = {} 
-
-# Scaling "Switches" - Flipped by messages, consumed by the Engine
 scale_up_needed = {"bridge": False, "validation": False}
 
 # --- HELPERS ---
@@ -42,20 +39,17 @@ def assign_stuff_based_on_type(service_type):
             "active_set": active_bridge_service_set,
             "idle_set": idle_bridge_services_set,
             "threshold": thresh_bridge_services,
-            "call_topic": publish_topics["bridge_call_topic"],
-            "client_key": "bridge"
+            "call_topic": publish_topics["bridge_call_topic"]
         }
     else:
         return {
             "active_set": active_validation_service_set,
             "idle_set": idle_validation_services_set,
             "threshold": thresh_validation_services,
-            "call_topic": publish_topics["validation_call_topic"],
-            "client_key": "validation"
+            "call_topic": publish_topics["validation_call_topic"]
         }
 
 def update_active_services(service_data, service_type):
-    global service_last_seen
     data = assign_stuff_based_on_type(service_type)
     active_set, idle_set = data['active_set'], data['idle_set']
     
@@ -63,14 +57,11 @@ def update_active_services(service_data, service_type):
     status = service_data.get("status")
     condition = service_data.get("condition")
 
-    # Mark as alive
     service_last_seen[s_id] = time.time()
 
-    # If it's running, we definitely don't need a scale-up anymore
     if status == "RUNNING":
         scale_up_needed[service_type] = False
 
-    # Logical Mapping
     if condition == "OVERLOAD" or status == "RUNNING":
         active_set.add(s_id)
         idle_set.discard(s_id)
@@ -83,97 +74,79 @@ def start_service(client, service_id, service_type, call_topic):
     client.publish(call_topic, msg)
     print(f"🚀 [ACTION] Scaling UP {service_type}: Starting {service_id}")
 
-def stop_service(client, service_id, call_topic):
-    msg = json.dumps({"service_id": service_id, "msg": "IDLE", "condition": None, "expected_reponse": False})
-    client.publish(call_topic, msg)
-    print(f"💤 [ACTION] Scaling DOWN: Sending {service_id} to IDLE")
-
-# --- CONTROL ENGINES ---
+# --- ENGINES ---
 
 async def orchestration_decision_engine(bridge_client, validation_client):
-    """
-    The Master Controller. 
-    Checks thresholds and scale-up requests every 2 seconds.
-    """
-    print("🧠 Orchestration Engine Online (Control Loop Active)")
+    """The Master Controller: Acts based on current known state."""
     while True:
         try:
             for s_type in [bridge_type, validation_type]:
                 info = assign_stuff_based_on_type(s_type)
                 client = bridge_client if s_type == bridge_type else validation_client
                 
-                active_count = len(info['active_set'])
-                
-                # 1. Maintain Minimum (Self-Healing)
-                if active_count < info['threshold']:
+                # Maintain Minimum (Self-Healing)
+                if len(info['active_set']) < info['threshold']:
                     if info['idle_set']:
                         chosen = info['idle_set'].pop()
                         start_service(client, chosen, s_type, info['call_topic'])
                 
-                # 2. Handle Reactive Scale Request (Overload)
+                # Handle Reactive Scale Request
                 elif scale_up_needed[s_type]:
                     if info['idle_set']:
                         chosen = info['idle_set'].pop()
                         start_service(client, chosen, s_type, info['call_topic'])
-                        # Turn off switch so we don't start a second one immediately
                         scale_up_needed[s_type] = False 
-                
-                # 3. Handle Scale Down (Optional: Only if condition is NORMAL for all)
-                # We keep this conservative to avoid flickering.
-
         except Exception as e:
             print(f"❌ Engine Error: {e}")
         await asyncio.sleep(2)
 
 async def infrastructure_heartbeat(bridge_client, validation_client):
-    """Zombie Hunter: Removes services that crashed (stopped talking)."""
+    """Zombie Hunter with Countdown: Wipes data at start of cycle and pings."""
     while True:
         try:
-            now = time.time()
-            dead_ids = [s_id for s_id, last_t in service_last_seen.items() if (now - last_t) > 45]
+            print(f"\n🔄 [NEW CYCLE] Clearing old data and sending status ping...")
             
-            for s_id in dead_ids:
-                print(f"💀 [PRUNE] Service {s_id} timed out. Removing from Sets.")
-                for s in [active_bridge_service_set, idle_bridge_services_set, 
-                          active_validation_service_set, idle_validation_services_set]:
-                    s.discard(s_id)
-                service_last_seen.pop(s_id)
+            # 1. Clear old messages/sets to only show fresh responses this cycle
+            active_bridge_service_set.clear()
+            idle_bridge_services_set.clear()
+            active_validation_service_set.clear()
+            idle_validation_services_set.clear()
+            service_last_seen.clear()
 
-            # Refresh Status Ping
+            # 2. Trigger fresh sweep
             ping = json.dumps({"service_id": "ALL", "msg": "STATUS", "condition": None, "expected_reponse": True})
             bridge_client.publish(publish_topics["bridge_call_topic"], ping)
             validation_client.publish(publish_topics["validation_call_topic"], ping)
-            
+
+            # 3. Countdown loop (30 seconds)
+            for remaining in range(30, 0, -1):
+                # We print on one line to keep logs clean
+                print(f"⏳ Time to next ping: {remaining}s | Active Bridges: {len(active_bridge_service_set)} | Active Val: {len(active_validation_service_set)}", end='\r')
+                await asyncio.sleep(1)
+            print() # Move to next line after countdown
+
         except Exception as e:
             print(f"❌ Heartbeat Error: {e}")
-        await asyncio.sleep(30)
+            await asyncio.sleep(5)
 
-# --- MQTT CALLBACKS ---
+# --- MQTT HANDLERS ---
 
 async def on_message_handler(client, topic, payload, qos, properties, queue):
-    """Simply puts messages into the queue. No decisions here."""
     data = json.loads(payload.decode())
     await queue.put({"topic": topic, "data": data})
 
 async def worker(queue):
-    """Processes the queue to update the SHARED STATE only."""
+    """Updates shared state based on incoming messages."""
     while True:
         item = await queue.get()
         topic, data = item['topic'], item['data']
-        
         is_bridge = (topic == subscribe_topics['bridge_call_recv_topic'])
         m_type = bridge_type if is_bridge else validation_type
         
-        # 1. Update our memory of the world
         update_active_services(data, m_type)
         
-        # 2. If Overload, flip the switch for the Decision Engine
         if data.get('condition') == "OVERLOAD":
             scale_up_needed[m_type] = True
-
-        # 3. Print Dashboard log
-        print(f"📊 [STATE] Bridges: {len(active_bridge_service_set)}A/{len(idle_bridge_services_set)}I | "
-              f"Val: {len(active_validation_service_set)}A/{len(idle_validation_services_set)}I")
         
         queue.task_done()
 
@@ -202,7 +175,6 @@ async def main():
     await bc.connect(host, port, ssl=ssl_ctx)
     await vc.connect(host, port, ssl=ssl_ctx)
 
-    # Start independent tasks
     asyncio.create_task(worker(q))
     asyncio.create_task(infrastructure_heartbeat(bc, vc))
     asyncio.create_task(orchestration_decision_engine(bc, vc))
