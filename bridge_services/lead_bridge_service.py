@@ -163,18 +163,22 @@ async def worker(client,data_queue):
             await push_data(data)
             logger.info("Pushing data in Kafka")
             data_queue.task_done()
+            over_load_cool_down_over=(current_time - last_overload_time) > over_load_cooldown_time
             if overload :
-                if current_condition!="OVERLOAD" or (current_time - last_overload_time) > over_load_cooldown_time:
+                if current_condition!="OVERLOAD" or over_load_cooldown_time:
                     last_overload_time=current_time
                     current_condition="OVERLOAD"
-                    service_under_load_call(client=client)
+                    # Removed it switching to a heartbeat system service_under_load_call(client=client)
             else:
+                if over_load_cooldown_time:
+                    current_condition="NORMAL"
+                """
                 if current_condition == "OVERLOAD":
                     # Wait for a "Stability Window" (e.g., 10 seconds of Normal traffic)
                     if (current_time - last_overload_time) > 10.0:
                         current_condition = "NORMAL"
                         send_status_response(client) # Inform Manager: I am okay now!
-                        logger.info("--- Condition returned to NORMAL. Informing Manager. ---")
+                        logger.info("--- Condition returned to NORMAL. Informing Manager. ---")"""    
     except ProducerClosed:
         logger.warning("Producer was closed, worker stopping push.")
         
