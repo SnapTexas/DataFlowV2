@@ -4,23 +4,20 @@ import uuid
 import ssl
 from functools import partial
 import json
-import time
 
-# --- CONFIGURATION ---
-subscribe_topics = {
-    "bridge_call_recv_topic": "00989800/from_bridge_calls",
-    "validation_call_recv_topic": "00989800/from_validation_calls"
-}
-publish_topics = {
-    "bridge_call_topic": "00989800/to_bridge_calls",
-    "validation_call_topic": "00989800/to_validation_calls"
-}
+subscribe_topics={
+                  "bridge_call_recv_topic":"00989800/from_bridge_calls",
+                  "validation_call_recv_topic":"00989800/from_validation_calls"
+                  }
+publish_topics={
+                "bridge_call_topic":"00989800/to_bridge_calls",
+                "validation_call_topic":"00989800/to_validation_calls"
+                }
+thresh_bridge_services=1# how many bridge services should run on default
+thresh_validation_services=1
 
-thresh_bridge_services = 1
-thresh_validation_services = 1
-
-bridge_type = "bridge"
-validation_type = "validation"
+bridge_type="bridge"
+validation_type="validation"
 
 
 
@@ -407,14 +404,11 @@ async def start_procedure(bridge_client,validation_client):#Done
             f"Validations: {val_found}/{thresh_validation_services}. Retrying in 5s...")
     await asyncio.sleep(5)
 
-# --- MQTT HANDLERS ---
 
-async def on_message_handler(client, topic, payload, qos, properties, queue):
-    data = json.loads(payload.decode())
-    await queue.put({"topic": topic, "data": data})
-
-async def worker(queue):
-    """Updates shared state based on incoming messages."""
+async def sync_infrastructure_and_boot(bridge_client, validation_client):#DONE
+    print("--- Infrastructure Sync: Waiting for services to check in ---")
+    global active_bridge_service_set,idle_bridge_services_set
+    global active_validation_service_set,idle_validation_services_set
     while True:
         # 1. Trigger fresh status sweep
         await asyncio.gather(
@@ -444,23 +438,32 @@ async def worker(queue):
     print("--- Initial Scaling: Booting minimum required services ---")
 
 async def main():
-    q = asyncio.Queue()
-    host, port = "31d09ce8b7fa4a92aafc62ae06187541.s1.eu.hivemq.cloud", 8883
-    username, password = "Snappp", "Snap00989800"
+    #store calls from services
+    incomming_calls_queue=asyncio.Queue()
+
+    host="31d09ce8b7fa4a92aafc62ae06187541.s1.eu.hivemq.cloud"
+    port=8883
+    username="Snappp"
+    password="Snap00989800"
     ssl_ctx = ssl.create_default_context()
 
-    bc = mqtt(str(uuid.uuid4()))
-    bc.set_auth_credentials(username, password)
-    bc.on_connect = partial(on_connect, t_key="bridge_call_recv_topic")
-    bc.on_message = partial(on_message_handler, queue=q)
+    # --- Client 1: Bridge Manager ---
+    bridge_client=mqtt(str(uuid.uuid4()))
+    bridge_client.set_auth_credentials(username=username, password=password)
+    bridge_client.on_connect=on_connect
+    bridge_client.on_message = partial(on_message,incomming_calls_queue=incomming_calls_queue)
+    bridge_client.on_disconnect = on_disconnect
+    bridge_client.on_subscribe=partial(on_subscribe,type=bridge_type)
+    await bridge_client.connect(host=host, port=port, ssl=ssl_ctx)
 
-    vc = mqtt(str(uuid.uuid4()))
-    vc.set_auth_credentials(username, password)
-    vc.on_connect = partial(on_connect, t_key="validation_call_recv_topic")
-    vc.on_message = partial(on_message_handler, queue=q)
-
-    await bc.connect(host, port, ssl=ssl_ctx)
-    await vc.connect(host, port, ssl=ssl_ctx)
+    # --- Client 2: Validation Manager ---
+    validation_client=mqtt(str(uuid.uuid4()))
+    validation_client.set_auth_credentials(username=username, password=password)
+    validation_client.on_connect= on_connect_validation
+    validation_client.on_message = partial(on_message,incomming_calls_queue=incomming_calls_queue)
+    validation_client.on_disconnect = on_disconnect
+    validation_client.on_subscribe=partial(on_subscribe,type=validation_type)
+    await validation_client.connect(host=host, port=port, ssl=ssl_ctx)
 
     
     asyncio.create_task(worker(bridge_client=bridge_client, validation_client=validation_client, queue=incomming_calls_queue))
@@ -479,5 +482,6 @@ async def main():
 
     await asyncio.Event().wait()
 
-if __name__ == "__main__":
+
+if __name__=="__main__":
     asyncio.run(main())
