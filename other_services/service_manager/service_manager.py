@@ -32,21 +32,33 @@ active_validation_service_set = set()
 idle_bridge_services_set = set()
 idle_validation_services_set = set()
 
+# --- DASHBOARD ---
+def print_cluster_status():
+    """Prints a clean view of the current network state."""
+    print("\n" + "═"*50)
+    print(f"📡 CLUSTER MONITOR | Time: {int(asyncio.get_event_loop().time())}")
+    print(f"  BRIDGE:     Active={list(active_bridge_service_set)} | Idle={list(idle_bridge_services_set)}")
+    print(f"  VALIDATION: Active={list(active_validation_service_set)} | Idle={list(idle_validation_services_set)}")
+    print("═"*50 + "\n")
+
 # --- MQTT CALLBACKS ---
 def on_connect(client, flags, rc, properties):
     client.subscribe(subscribe_topics['bridge_call_recv_topic'])
-    print(f"Connected to Bridge Topics")
+    print(f"✅ Bridge Channel Connected")
 
 def on_connect_validation(client, flags, rc, properties):
     client.subscribe(subscribe_topics['validation_call_recv_topic'])
-    print(f"Connected to Validation Topics")
+    print(f"✅ Validation Channel Connected")
 
 async def on_message(client, topic, payload, qos, properties, incomming_calls_queue):
-    service_data = {
-        "topic": topic,
-        "data": json.loads(payload.decode('utf-8'))
-    }
-    await incomming_calls_queue.put(json.dumps(service_data))
+    try:
+        service_data = {
+            "topic": topic,
+            "data": json.loads(payload.decode('utf-8'))
+        }
+        await incomming_calls_queue.put(json.dumps(service_data))
+    except Exception as e:
+        print(f"Incoming Msg Error: {e}")
 
 # --- LOGIC HELPERS ---
 def assign_stuff_based_on_type(type):
@@ -75,52 +87,24 @@ def update_services_status(service_data, s_type):
     status = service_data.get("status")
     condition = service_data.get('condition')
 
-    if status == "RUNNING" and condition == "NORMAL":
+    if status == "RUNNING":
         active_set.add(s_id)
         idle_set.discard(s_id)
     elif status == "IDLE":
         active_set.discard(s_id)
         idle_set.add(s_id)
-    elif condition == "OVERLOAD":
-        active_set.add(s_id) # Still active if overloaded
-        idle_set.discard(s_id)
 
-async def heartbeat_publisher(bridge_client, validation_client):
-    """Broadcasts STATUS requests and REAPS dead services."""
-    while True:
-        try:
-            # 1. Broadast Pulse
-            heartbeat_msg = json.dumps({"service_id": "ALL", "msg": "STATUS"})
-            bridge_client.publish(publish_topics['bridge_call_topic'], heartbeat_msg)
-            validation_client.publish(publish_topics['validation_call_topic'], heartbeat_msg)
-            
-            # 2. THE REAPER: Audit liveness
-            now = asyncio.get_event_loop().time()
-            for s_id in list(last_seen_state_of_service.keys()):
-                info = last_seen_state_of_service[s_id]
-                if (now - info['last_seen']) > service_expiry_time:
-                    if not info.get('is_expired', False):
-                        print(f"💀 REAPER: Service {s_id} timed out. Evicting.")
-                        active_bridge_service_set.discard(s_id)
-                        idle_bridge_services_set.discard(s_id)
-                        active_validation_service_set.discard(s_id)
-                        idle_validation_services_set.discard(s_id)
-                        info['is_expired'] = True
-
-            await asyncio.sleep(30)
-        except Exception as e:
-            print(f"Heartbeat Error: {e}")
-            await asyncio.sleep(5)
+async def get_services_status(client, type):
+    """Broadcasting STATUS probe."""
+    data = assign_stuff_based_on_type(type)
+    msg = json.dumps({"service_id": "ALL", "msg": "STATUS"})
+    client.publish(data['call_topic'], msg)
 
 def update_last_seen(msg_wrapper, last_seen_dict):
-    topic = msg_wrapper.get('topic')
     data = msg_wrapper.get('data')
     s_id = data.get('service_id')
-    s_type = bridge_type if "bridge" in topic else validation_type
-    
     last_seen_dict[s_id] = {
         "last_seen": asyncio.get_event_loop().time(),
-        "service_type": s_type,
         "is_expired": False
     }
 
@@ -134,98 +118,108 @@ def update_overload_status(current_condition, current_status, s_type):
     is_reporting_overload = (current_condition == "OVERLOAD" and current_status == "RUNNING")
 
     if is_reporting_overload and not overload_service[s_type]:
-        print(f"⚠️ ALARM: {s_type} cluster OVERLOADED.")
+        print(f"⚠️ ALARM: {s_type} cluster moved to OVERLOAD.")
         overload_service[s_type] = True
         last_overload_change_time = now
     elif not is_reporting_overload and overload_service[s_type]:
-        print(f"✅ INFO: {s_type} cluster NORMAL.")
+        print(f"ℹ️ INFO: {s_type} cluster returned to NORMAL.")
         overload_service[s_type] = False
         last_overload_change_time = now
 
-# --- SCALING PROCEDURES ---
+# --- SCALING & REAPER ---
 def start_service(client, service_id, s_type):
-    data = json.dumps({"service_id": service_id, "msg": "START"})
+    msg = json.dumps({"service_id": service_id, "msg": "START"})
     topic = publish_topics['bridge_call_topic'] if s_type == bridge_type else publish_topics['validation_call_topic']
-    client.publish(topic, data)
-    print(f"🚀 Sent START to {s_type}: {service_id}")
+    client.publish(topic, msg)
+    print(f"🚀 Scaling: Starting {s_type} [{service_id}]")
 
 async def start_procedure(bc, vc):
-    # Bridge Scaling
+    """The central scaling decision logic."""
+    # Bridge scaling
     if len(active_bridge_service_set) < thresh_bridge_services or overload_service[bridge_type]:
-        chosen = choose_service_start(idle_bridge_services_set, bridge_type)
+        chosen = idle_bridge_services_set.pop() if idle_bridge_services_set else None
         if chosen: start_service(bc, chosen, bridge_type)
 
-    # Validation Scaling
+    # Validation scaling
     if len(active_validation_service_set) < thresh_validation_services or overload_service[validation_type]:
-        chosen = choose_service_start(idle_validation_services_set, validation_type)
+        chosen = idle_validation_services_set.pop() if idle_validation_services_set else None
         if chosen: start_service(vc, chosen, validation_type)
 
-def choose_service_start(idle_set, s_type):
-    if not idle_set: return None
-    return idle_set.pop()
-
-async def respond_msg(bc, vc, topic, data):
-    s_type = bridge_type if topic == subscribe_topics['bridge_call_recv_topic'] else validation_type
-    
-    update_overload_status(data.get('condition'), data.get('status'), s_type)
-    await start_procedure(bc, vc)
+async def heartbeat_publisher(bc, vc):
+    """Active Heartbeat Pulse and Zombie Reaper."""
+    while True:
+        try:
+            # 1. Pulse
+            msg = json.dumps({"service_id": "ALL", "msg": "STATUS"})
+            bc.publish(publish_topics['bridge_call_topic'], msg)
+            vc.publish(publish_topics['validation_call_topic'], msg)
+            
+            # 2. Reap
+            now = asyncio.get_event_loop().time()
+            for s_id in list(last_seen_state_of_service.keys()):
+                info = last_seen_state_of_service[s_id]
+                if (now - info['last_seen']) > service_expiry_time:
+                    if not info.get('is_expired', False):
+                        print(f"💀 REAPER: Evicting stale service {s_id}")
+                        active_bridge_service_set.discard(s_id)
+                        idle_bridge_services_set.discard(s_id)
+                        active_validation_service_set.discard(s_id)
+                        idle_validation_services_set.discard(s_id)
+                        info['is_expired'] = True
+            
+            # 3. Check if eviction caused a shortage
+            await start_procedure(bc, vc)
+            await asyncio.sleep(30)
+        except Exception as e:
+            print(f"Heartbeat Error: {e}")
+            await asyncio.sleep(5)
 
 # --- CORE LOOPS ---
 async def worker(bc, vc, queue):
     while True:
         try:
             raw = await queue.get()
-            msg = json.loads(raw)
-            data = msg['data']
-            topic = msg['topic']
-            
-            # Update registry FIRST
-            update_last_seen(msg, last_seen_state_of_service)
-            s_type = bridge_type if "bridge" in topic else validation_type
-            update_services_status(data, s_type)
-            
-            await respond_msg(bc, vc, topic, data)
+            try:
+                msg = json.loads(raw)
+                data = msg['data']
+                topic = msg['topic']
+                s_type = bridge_type if "bridge" in topic else validation_type
+                
+                # Update World Map
+                update_last_seen(msg, last_seen_state_of_service)
+                update_services_status(data, s_type)
+                update_overload_status(data.get('condition'), data.get('status'), s_type)
+                
+                # Print Status Board
+                print_cluster_status()
+
+                # Action
+                await start_procedure(bc, vc)
+            finally:
+                queue.task_done()
+        except asyncio.CancelledError:
+            break
         except Exception as e:
             print(f"Worker Error: {e}")
-        finally:
-            queue.task_done()
+
 async def sync_infrastructure_and_boot(bc, vc):
-    print("--- Initializing Infrastructure ---")
+    print("--- 🛠 Initializing Infrastructure 🛠 ---")
     while True:
-        # 1. Ask for current status to fill the sets
-        await asyncio.gather(
-            get_services_status(bc, type=bridge_type),
-            get_services_status(vc, type=validation_type)
-        )
-        
-        # Give the worker a small moment (2s) to process the incoming MQTT replies
-        await asyncio.sleep(2)
+        await get_services_status(bc, bridge_type)
+        await get_services_status(vc, validation_type)
+        await asyncio.sleep(2) # Process responses
 
         b_count = len(active_bridge_service_set)
         v_count = len(active_validation_service_set)
 
-        # 2. THE EXIT CONDITION: If targets are met, STOP the loop and move to steady state
         if b_count >= thresh_bridge_services and v_count >= thresh_validation_services:
-            print(f"✅ INFRASTRUCTURE READY: Bridges({b_count}) Validations({v_count})")
-            break # <--- This will finally stop the loop!
+            print(f"✨ ALL SYSTEMS GO: Bridges={b_count}, Validations={v_count}")
+            break
         
-        # 3. Only if we are NOT ready, we try to start more
-        print(f"🔄 Booting... Current: B({b_count}/{thresh_bridge_services}) V({v_count}/{thresh_validation_services})")
+        print(f"⏳ Waiting for nodes... (B:{b_count}/{thresh_bridge_services} V:{v_count}/{thresh_validation_services})")
         await start_procedure(bc, vc)
-async def get_services_status(client, type):
-    """
-    Sends a broadcast STATUS request to a specific cluster type.
-    """
-    data = assign_stuff_based_on_type(type)
-    call_topic = data['call_topic']
-    
-    # Message to all services of this type
-    status_request = {
-        "service_id": "ALL",
-        "msg": "STATUS"
-    }
-    
-    client.publish(call_topic, json.dumps(status_request))
+        await asyncio.sleep(3)
+
 async def main():
     calls_q = asyncio.Queue()
     host, port = "31d09ce8b7fa4a92aafc62ae06187541.s1.eu.hivemq.cloud", 8883
