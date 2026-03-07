@@ -260,7 +260,7 @@ def update_overload_status(current_condition, current_status, s_type):
     global overload_service, last_overload_change_time
     
     current_time = asyncio.get_event_loop().time()
-    key = f"{s_type}_overload"
+    key = s_type
     
     # 1. Cooldown Check: If we changed state too recently, do nothing
     if (current_time - last_overload_change_time) < over_load_cooldown:
@@ -342,14 +342,16 @@ async def worker(bridge_client, validation_client, queue):#DONE# checks the queu
             msg=json.loads(msg)
             data=msg['data']
             topic=msg['topic']
-            
+            update_last_seen(msg,last_seen_state_of_service)
+            s_type = bridge_type if "bridge" in topic else validation_type
+            update_services_status(data, s_type)
             print(f"Recieved Msg:{data} from topic :{topic}")
             await respond_msg(bridge_client, validation_client, topic,data)  
             print("Current number of active bridge_services:",len(active_bridge_service_set))
             print("Current number of idle bridge_services:",len(idle_bridge_services_set))
             print("Current number of active validation_services:",len(active_validation_service_set))
             print("Current number of idle validation_services:",len(idle_validation_services_set))
-            update_last_seen(msg,last_seen_state_of_service)
+            
         except Exception as e:
                 print("Exception happend in Worker ", e)
                # slow work here
@@ -423,9 +425,16 @@ async def sync_infrastructure_and_boot(bridge_client, validation_client):#DONE
         val_found = len(active_validation_service_set)
 
         # We wait until we see at least the minimum required services online
-        if bridge_found >= thresh_bridge_services  and val_found >= thresh_validation_services:
-            print(f"SUCCESS: Infrastructure ready. Found {bridge_found} Bridges and {val_found} Validations.")
-            break
+        if bridge_found >= thresh_bridge_services  :
+
+            print(f"SUCCESS: Bridge Infrastructure ready. Found {bridge_found} Bridges ")
+        if  val_found >= thresh_validation_services:
+            
+            print(f"SUCCESS: Bridge Infrastructure ready. Found {bridge_found} Bridges ")
+        if val_found>=thresh_validation_services and bridge_found>=thresh_bridge_services:
+            print("Startup complete ")
+            
+            break 
         else:
             print(f"Number of Validation Service:{val_found}")
             print(f"Number of Bridge Service: {bridge_found}")
