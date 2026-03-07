@@ -297,35 +297,42 @@ def update_last_seen(msg,last_seen:dict):
                            "is_expired":False}
 
     
-   
-async def heartbeat_publisher(bridge_client,validation_client):
-    """0
-    Background task that pulses the Manager every 30 seconds.
+   async def heartbeat_publisher(bridge_client, validation_client):
     """
-    global current_condition # The state updated by your worker
-    
-    print(f"Heartbeat was sent")
-    
+    Pulses the cluster and REAPS services that have failed to respond.
+    """
     while True:
         try:
-            # Prepare the "One-Stage" heartbeat payload
-            heartbeat_msg = {
-                "service_id": "ALL",
-                "msg": "STATUS"
-            }
+            # 1. Broadast heartbeat request
+            heartbeat_msg = {"service_id": "ALL", "msg": "STATUS"}
+            bridge_client.publish(publish_topics['bridge_call_topic'], json.dumps(heartbeat_msg))
+            validation_client.publish(publish_topics['validation_call_topic'], json.dumps(heartbeat_msg))
             
-            # Publish to the Manager
-            bridge_client.publish(publish_topics['bridge_call_topic'], heartbeat_msg)
-            validation_client.publish(publish_topics['validation_call_topic'], heartbeat_msg)
-            # logger.debug(f"Heartbeat sent: {current_condition}")
-            
-            # Sleep for exactly 30 seconds
+            # 2. THE REAPER: Audit all known services
+            now = asyncio.get_event_loop().time()
+            # Iterate a copy of the keys to avoid 'dict changed size' errors
+            for s_id in list(last_seen_state_of_service.keys()):
+                info = last_seen_state_of_service[s_id]
+                
+                # If they haven't been seen for > 30 seconds (service_expiry_time)
+                if (now - info['last_seen']) > service_expiry_time:
+                    if not info.get('is_expired', False):
+                        print(f"💀 EVICTING GHOST: {s_id} (Silent for {service_expiry_time}s)")
+                        
+                        # REMOVE FROM SETS IMMEDIATELY
+                        active_bridge_service_set.discard(s_id)
+                        idle_bridge_services_set.discard(s_id)
+                        active_validation_service_set.discard(s_id)
+                        idle_validation_services_set.discard(s_id)
+                        
+                        # Mark so we don't spam this print statement
+                        info['is_expired'] = True
+
             await asyncio.sleep(30)
             
         except Exception as e:
-            print(f"Heartbeat failed: {e}")
-            await asyncio.sleep(5) # Short sleep before retry if network fails
-
+            print(f"Heartbeat/Reaper Error: {e}")
+            await asyncio.sleep(5)
 
 
 
