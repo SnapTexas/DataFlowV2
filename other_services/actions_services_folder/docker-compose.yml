@@ -1,13 +1,19 @@
+version: '3.8'
+
 services:
   actions:
     build: .
-    # Use the specific script name you provided earlier
+    container_name: actions_service_v2
     command: ["python", "-u", "actions_service.py"]
     volumes:
       - .:/app 
     environment:
       - PYTHONUNBUFFERED=1
-    # We use 'bridge' (default) instead of your external 'kafka-pipeline'
+      # Mapping your .env names to the container environment
+      - MQTT_HOST=${MQTT_HOST}
+      - MQTT_PORT=${MQTT_PORT}
+      - MQTT_USER=${MQTT_USER}
+      - MQTT_PASS=${MQTT_PASS}
     networks:
       - actions-net
     restart: always
@@ -15,6 +21,3 @@ services:
 networks:
   actions-net:
     driver: bridge
-
-
-    ##DataFlow-V2

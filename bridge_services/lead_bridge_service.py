@@ -9,6 +9,11 @@ from aiokafka.errors import KafkaConnectionError, RequestTimedOutError, Producer
 import logging
 import colorlog
 import socket
+from dotenv import load_dotenv
+import os
+
+
+load_dotenv()
 
 # --- LOGGING CONFIGURATION ---
 handler = colorlog.StreamHandler()
@@ -178,37 +183,46 @@ async def worker(data_queue):
             if total_pushed % 100 == 0:
                 logger.info(f"📊 Total processed: {total_pushed} units")
         data_queue.task_done()
-
 async def on_data_received(client, topic, payload, qos, properties, data_queue):
-    """Filters data from manager calls and puts valid readings in queue."""
-    if topic == manager_sub_topic:
-        return # Ignore manager calls reaching data client
-    
     try:
         data = json.loads(payload.decode('utf-8'))
-        await data_queue.put(data)
-    except:
-        pass
+        
+        # BLOCK 1: Check if it's a known management topic (optional but good)
+        if topic == manager_sub_topic:
+            return
 
+        # BLOCK 2: Check content (THE REAL FIX)
+        # If it has 'is_status' or 'msg', it is NOT sensor data.
+        if data.get('is_status') is True or 'msg' in data:
+            return
+
+        # If it passed both blocks, it's actual IoT data (like {'temp': 20})
+        await data_queue.put(data)
+        
+    except Exception:
+        pass # Ignore malformed JSON
 # --- MAIN ---
 
 async def main():
     logger.info(f"Starting Bridge ID: {service_id}")
     
-    host, port = "31d09ce8b7fa4a92aafc62ae06187541.s1.eu.hivemq.cloud", 8883
+    host = os.getenv("MQTT_HOST")
+    port = os.getenv("MQTT_PORT")
+    username = os.getenv("MQTT_USER")
+    password = os.getenv("MQTT_PASS")
     ssl_ctx = ssl.create_default_context()
     data_queue = asyncio.Queue()
 
     # Manager Control Client
     client = mqtt(service_id)
-    client.set_auth_credentials("Snappp", "Snap00989800")
+    client.set_auth_credentials(username, password)
     client.on_connect = lambda c, f, r, p: (c.subscribe(manager_sub_topic), send_status_response(c))
     client.on_message = partial(respond_to_manager, data_client=None) # placeholder
     await client.connect(host, port, ssl=ssl_ctx)
 
     # Data Pipeline Client
     data_client = mqtt(service_id_data)
-    data_client.set_auth_credentials("Snappp", "Snap00989800")
+    data_client.set_auth_credentials(username, password)
     data_client.on_message = partial(on_data_received, data_queue=data_queue)
     await data_client.connect(host, port, ssl=ssl_ctx)
 

@@ -6,7 +6,9 @@ from aiokafka import AIOKafkaConsumer
 from supabase import create_client, Client
 import colorlog
 import logging
+from dotenv import load_dotenv
 
+load_dotenv()
 
 # Load environment variables (API Keys)
 
@@ -22,13 +24,13 @@ logger.addHandler(handler)
 logger.setLevel(logging.INFO)
 
 # --- CONFIGURATION ---
-BOOTSTRAP_SERVERS = 'kafka-1:9092,kafka-2:9092'
-INPUT_TOPIC = 'validated-data'
+
+BOOTSTRAP_SERVERS = os.getenv('KAFKA_BROKERS')
+INPUT_TOPIC = os.getenv('TOPIC_VALIDATED')
 
 # Update these with your Supabase credentials
-SUPABASE_URL = "https://woqcdiqfftvdmqtlfgnh.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndvcWNkaXFmZnR2ZG1xdGxmZ25oIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI4MDYyMDMsImV4cCI6MjA4ODM4MjIwM30._9jAf4myXv6nC_F_-TUmK-uHafCIBau3S73U0RxaMx8"
-
+SUPABASE_URL = os.getenv('SUPABASE_URL')
+SUPABASE_KEY = os.getenv('SUPABASE_KEY')
 # Initialize Supabase Client
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 

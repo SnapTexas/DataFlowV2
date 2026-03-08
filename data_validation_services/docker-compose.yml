@@ -5,6 +5,10 @@ services:
       - .:/app 
     environment:
       - PYTHONUNBUFFERED=1
+      - MQTT_HOST=${MQTT_HOST}
+      - MQTT_PORT=${MQTT_PORT}
+      - MQTT_USER=${MQTT_USER}
+      - MQTT_PASS=${MQTT_PASS}
     networks:
       - kafka-pipeline
     restart: always

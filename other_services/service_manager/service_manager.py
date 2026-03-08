@@ -4,15 +4,32 @@ import uuid
 import ssl
 from functools import partial
 import json
+import os
+from dotenv import load_dotenv
 
-# --- CONFIGURATION ---
+load_dotenv()
+# --- CONFIGURATION FROM ENV ---
+MQTT_HOST = os.getenv("MQTT_HOST", "31d09ce8b7fa4a92aafc62ae06187541.s1.eu.hivemq.cloud")
+MQTT_PORT = int(os.getenv("MQTT_PORT", 8883))
+MQTT_USER = os.getenv("MQTT_USER", "Snappp")
+MQTT_PASS = os.getenv("MQTT_PASS", "Snap00989800")
+
+# Topic Configuration
+BRIDGE_RECV = os.getenv("TOPIC_BRIDGE_RECV", "00989800/from_bridge_calls")
+VAL_RECV = os.getenv("TOPIC_VAL_RECV", "00989800/from_validation_calls")
+BRIDGE_SEND = os.getenv("TOPIC_BRIDGE_SEND", "00989800/to_bridge_calls")
+VAL_SEND = os.getenv("TOPIC_VAL_SEND", "00989800/to_validation_calls")
+
+# Thresholds
+THRESH_BRIDGE = int(os.getenv("THRESH_BRIDGE", 1))
+THRESH_VAL = int(os.getenv("THRESH_VAL", 1))
 subscribe_topics = {
-    "bridge_call_recv_topic": "00989800/from_bridge_calls",
-    "validation_call_recv_topic": "00989800/from_validation_calls"
+    "bridge_call_recv_topic": BRIDGE_RECV,
+    "validation_call_recv_topic": VAL_RECV
 }
 publish_topics = {
-    "bridge_call_topic": "00989800/to_bridge_calls",
-    "validation_call_topic": "00989800/to_validation_calls"
+    "bridge_call_topic": BRIDGE_SEND,
+    "validation_call_topic": VAL_SEND
 }
 
 thresh_bridge_services = 1
@@ -61,15 +78,15 @@ async def on_message(client, topic, payload, qos, properties, incomming_calls_qu
         print(f"Incoming Msg Error: {e}")
 
 # --- LOGIC HELPERS ---
-def assign_stuff_based_on_type(type):
-    if type == bridge_type:
+def assign_stuff_based_on_type(s_type):
+    if s_type == bridge_type:
         return {
             "active_set": active_bridge_service_set,
             "idle_set": idle_bridge_services_set,
             "threshold": thresh_bridge_services,
             "call_topic": publish_topics['bridge_call_topic']
         }
-    elif type == validation_type:
+    elif s_type == validation_type:
         return {
             "active_set": active_validation_service_set,
             "idle_set": idle_validation_services_set,
@@ -85,7 +102,6 @@ def update_services_status(service_data, s_type):
     
     s_id = service_data.get("service_id")
     status = service_data.get("status")
-    condition = service_data.get('condition')
 
     if status == "RUNNING":
         active_set.add(s_id)
@@ -94,9 +110,8 @@ def update_services_status(service_data, s_type):
         active_set.discard(s_id)
         idle_set.add(s_id)
 
-async def get_services_status(client, type):
-    """Broadcasting STATUS probe."""
-    data = assign_stuff_based_on_type(type)
+async def get_services_status(client, s_type):
+    data = assign_stuff_based_on_type(s_type)
     msg = json.dumps({"service_id": "ALL", "msg": "STATUS"})
     client.publish(data['call_topic'], msg)
 
@@ -126,6 +141,25 @@ def update_overload_status(current_condition, current_status, s_type):
         overload_service[s_type] = False
         last_overload_change_time = now
 
+def scaling_down(s_type, client):
+    """Checks if we have too many active services and sends them to IDLE."""
+    global overload_service
+    data = assign_stuff_based_on_type(s_type)
+    active_set = data.get('active_set')
+    threshold = data.get('threshold')
+    call_topic = data.get('call_topic')
+    
+    # Scale down only if cluster is NOT overloaded and we are above threshold
+    if not overload_service[s_type] and len(active_set) > threshold:
+        # Get a service ID from active set
+        service_id = list(active_set)[0] 
+        send_data = json.dumps({
+            "service_id": service_id,
+            "msg": "IDLE"
+        })
+        client.publish(call_topic, send_data)
+        print(f"📉 Scaling: {s_type} [{service_id}] requested to go IDLE.")
+
 # --- SCALING & REAPER ---
 def start_service(client, service_id, s_type):
     msg = json.dumps({"service_id": service_id, "msg": "START"})
@@ -137,24 +171,21 @@ async def start_procedure(bc, vc):
     """The central scaling decision logic."""
     # Bridge scaling
     if len(active_bridge_service_set) < thresh_bridge_services or overload_service[bridge_type]:
-        chosen = idle_bridge_services_set.pop() if idle_bridge_services_set else None
+        chosen = list(idle_bridge_services_set)[0] if idle_bridge_services_set else None
         if chosen: start_service(bc, chosen, bridge_type)
 
     # Validation scaling
     if len(active_validation_service_set) < thresh_validation_services or overload_service[validation_type]:
-        chosen = idle_validation_services_set.pop() if idle_validation_services_set else None
+        chosen = list(idle_validation_services_set)[0] if idle_validation_services_set else None
         if chosen: start_service(vc, chosen, validation_type)
 
 async def heartbeat_publisher(bc, vc):
-    """Active Heartbeat Pulse and Zombie Reaper."""
     while True:
         try:
-            # 1. Pulse
             msg = json.dumps({"service_id": "ALL", "msg": "STATUS"})
             bc.publish(publish_topics['bridge_call_topic'], msg)
             vc.publish(publish_topics['validation_call_topic'], msg)
             
-            # 2. Reap
             now = asyncio.get_event_loop().time()
             for s_id in list(last_seen_state_of_service.keys()):
                 info = last_seen_state_of_service[s_id]
@@ -167,7 +198,6 @@ async def heartbeat_publisher(bc, vc):
                         idle_validation_services_set.discard(s_id)
                         info['is_expired'] = True
             
-            # 3. Check if eviction caused a shortage
             await start_procedure(bc, vc)
             await asyncio.sleep(30)
         except Exception as e:
@@ -184,16 +214,18 @@ async def worker(bc, vc, queue):
                 data = msg['data']
                 topic = msg['topic']
                 s_type = bridge_type if "bridge" in topic else validation_type
+                client = bc if s_type == bridge_type else vc
                 
-                # Update World Map
                 update_last_seen(msg, last_seen_state_of_service)
                 update_services_status(data, s_type)
                 update_overload_status(data.get('condition'), data.get('status'), s_type)
                 
-                # Print Status Board
                 print_cluster_status()
-
-                # Action
+                
+                # Try scaling down if cluster is healthy
+                scaling_down(s_type=s_type, client=client)
+                
+                # Ensure minimum services are running
                 await start_procedure(bc, vc)
             finally:
                 queue.task_done()
@@ -207,7 +239,7 @@ async def sync_infrastructure_and_boot(bc, vc):
     while True:
         await get_services_status(bc, bridge_type)
         await get_services_status(vc, validation_type)
-        await asyncio.sleep(2) # Process responses
+        await asyncio.sleep(2) 
 
         b_count = len(active_bridge_service_set)
         v_count = len(active_validation_service_set)
@@ -222,17 +254,17 @@ async def sync_infrastructure_and_boot(bc, vc):
 
 async def main():
     calls_q = asyncio.Queue()
-    host, port = "31d09ce8b7fa4a92aafc62ae06187541.s1.eu.hivemq.cloud", 8883
+    host, port = MQTT_HOST,MQTT_PORT
     ssl_ctx = ssl.create_default_context()
 
     bc = mqtt(str(uuid.uuid4()))
-    bc.set_auth_credentials("Snappp", "Snap00989800")
+    bc.set_auth_credentials(MQTT_USER, MQTT_PASS)
     bc.on_connect = on_connect
     bc.on_message = partial(on_message, incomming_calls_queue=calls_q)
     await bc.connect(host, port, ssl=ssl_ctx)
 
     vc = mqtt(str(uuid.uuid4()))
-    vc.set_auth_credentials("Snappp", "Snap00989800")
+    vc.set_auth_credentials(MQTT_USER, MQTT_PASS)
     vc.on_connect = on_connect_validation
     vc.on_message = partial(on_message, incomming_calls_queue=calls_q)
     await vc.connect(host, port, ssl=ssl_ctx)
@@ -244,4 +276,7 @@ async def main():
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n👋 Orchestrator stopped.")

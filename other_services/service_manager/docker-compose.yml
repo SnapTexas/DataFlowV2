@@ -1,13 +1,27 @@
+version: '3.8'
+
 services:
-  actions:
+  # --- THE ORCHESTRATOR / MANAGER ---
+  manager:
     build: .
-    # Use the specific script name you provided earlier
+    container_name: service_manager
+    # Ensure this matches the filename of your manager script
     command: ["python", "-u", "service_manager.py"]
     volumes:
-      - .:/app 
+      - .:/app
     environment:
       - PYTHONUNBUFFERED=1
-    # We use 'bridge' (default) instead of your external 'kafka-pipeline'
+      # Docker will now look for these keys in your .env file
+      - MQTT_HOST=${MQTT_HOST}
+      - MQTT_PORT=${MQTT_PORT}
+      - MQTT_USER=${MQTT_USER}
+      - MQTT_PASS=${MQTT_PASS}
+      - THRESH_BRIDGE=${THRESH_BRIDGE}
+      - THRESH_VAL=${THRESH_VAL}
+      - TOPIC_BRIDGE_RECV=${TOPIC_BRIDGE_RECV}
+      - TOPIC_VAL_RECV=${TOPIC_VAL_RECV}
+      - TOPIC_BRIDGE_SEND=${TOPIC_BRIDGE_SEND}
+      - TOPIC_VAL_SEND=${TOPIC_VAL_SEND}
     networks:
       - actions-net
     restart: always
@@ -15,6 +29,3 @@ services:
 networks:
   actions-net:
     driver: bridge
-
-
-    ##DataFlow-V2

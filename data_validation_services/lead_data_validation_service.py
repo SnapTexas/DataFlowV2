@@ -143,8 +143,9 @@ async def validation_worker(mqtt_client):
 
                     # 2. Logic: Process and Forward
                     if isinstance(raw_payload, dict):
-                        raw_payload['validated_by'] = service_id
+                        #raw_payload['validated_by'] = service_id
                         await producer.send_and_wait(OUTPUT_TOPIC, raw_payload)
+                        print(raw_payload)
                         total_published += 1
                         
                         if total_published % 50 == 0:
@@ -166,12 +167,15 @@ def on_connect(client, flags, rc, properties):
     send_status_response(client)
 
 async def main():
-    host, port = "31d09ce8b7fa4a92aafc62ae06187541.s1.eu.hivemq.cloud", 8883
+    host = os.getenv("MQTT_HOST")
+    port = os.getenv("MQTT_PORT")
+    username = os.getenv("MQTT_USER")
+    password = os.getenv("MQTT_PASS")
     ssl_ctx = ssl.create_default_context()
 
     from gmqtt import Client as MQTTClient
     mqtt_c = MQTTClient(service_id)
-    mqtt_c.set_auth_credentials("Snappp", "Snap00989800")
+    mqtt_c.set_auth_credentials(username, password)
     mqtt_c.on_connect = on_connect
     mqtt_c.on_message = respond_to_manager
     

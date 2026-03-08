@@ -4,7 +4,9 @@ from functools import partial
 import asyncio
 import ssl
 import socket
-
+from dotenv import load_dotenv
+import os
+load_dotenv()
 # --- CONFIGURATION ---
 list_of_allowed_tasks = ["Alert", "Task1", "Task2"]
 tasks_completed = []
@@ -32,11 +34,11 @@ async def do_tasks(ml_report_topic, client, topic, payload, qos, properties):
 
 async def main():
     # HiveMQ Cloud Details
-    host = "31d09ce8b7fa4a92aafc62ae06187541.s1.eu.hivemq.cloud"
-    port = 8883
-    username = "Snappp"
-    password = "Snap00989800"
-    
+
+    host = os.getenv("MQTT_HOST")
+    port = os.getenv("MQTT_PORT")
+    username = os.getenv("MQTT_USER")
+    password = os.getenv("MQTT_PASS")
     actions_topic = "$share/iot-data-pipeline-v2/00989800/actions"
     ml_report_topic = "00989800/ml-report"
     
