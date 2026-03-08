@@ -3,119 +3,129 @@ import json
 import ssl
 import os
 import socket
+import uuid
+import re
 from aiokafka import AIOKafkaConsumer
 from gmqtt import Client as mqtt_client
 import google.generativeai as genai
 
 # --- CONFIGURATION ---
-# IMPORTANT: Delete this key from Google AI Studio and generate a new one after this!
 GEMINI_API_KEY = "AIzaSyCnOMeh7iof_MO2mm03Sed28VGi-bij6qk"
 BOOTSTRAP_SERVERS = 'kafka-1:9092,kafka-2:9092'
 INPUT_TOPIC = 'validated-data'
 ACTIONS_TOPIC = "00989800/actions"
 SERVICE_ID = f"ML_BRAIN_{socket.gethostname()}"
 
-# SPAM PROTECTION SETTINGS
-GEMINI_COOLDOWN = 20  # Minimum seconds between AI calls
-MIN_BATCH_SIZE = 30   # Minimum messages needed to trigger analysis
+# --- SPAM & QUOTA PROTECTION ---
+GEMINI_COOLDOWN = 60  # Base cooldown
+MIN_BATCH_SIZE = 40   # Trigger threshold
+MAX_BUFFER_SIZE = 200 # Prevent bloat during 429 errors
 
 # Initialize Gemini
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-2.0-flash')
 
-# Registry to track the last time we asked the AI
-last_gemini_call_time = 0
+# This will now track the "Next Allowed Call Time"
+next_allowed_call_time = 0
 
-async def heartbeat():
-    """Background task to show the service is alive in the logs."""
-    while True:
-        print(f"💓 [HEARTBEAT] {SERVICE_ID} monitoring Kafka...")
-        await asyncio.sleep(60)
+def compact_data(data_batch):
+    """Reduces token usage by removing redundant sequential readings."""
+    if not data_batch: return []
+    compacted = [data_batch[0]]
+    for i in range(1, len(data_batch)):
+        if data_batch[i] != data_batch[i-1]:
+            compacted.append(data_batch[i])
+    return compacted
 
 async def ask_gemini_and_act(data_batch, mqtt_c):
-    """Sends a batch of sensor data to Gemini and publishes the resulting action."""
-    print(f"🤖 [AI ANALYSIS] Processing batch of {len(data_batch)} readings...")
+    """Sends sensor data to Gemini with dynamic retry-after handling."""
+    global next_allowed_call_time
+    
+    clean_data = compact_data(data_batch)
+    print(f"🤖 [AI ANALYSIS] Sending {len(clean_data)} readings to Gemini...")
     
     prompt = f"""
-    You are an IoT System Controller. Analyze this batch of validated sensor data:
-    {data_batch}
-
+    Analyze this batch of IoT sensor data: {clean_data}
     Rules:
-    1. If values are abnormal or dangerous, choose ONE action: [Alert, Task1, Task2].
-    2. If everything is within normal operating parameters, reply 'NONE'.
-    3. Reply ONLY with the single word (no punctuation or explanation).
+    - If abnormal/dangerous, reply ONLY: Alert, Task1, or Task2.
+    - If normal, reply ONLY: NONE.
+    - Strictly one word only.
     """
     
     try:
-        # to_thread keeps the internal asyncio loop from blocking during the API request
         response = await asyncio.to_thread(model.generate_content, prompt)
+        action = response.text.strip().replace('*', '').replace('.', '')
         
-        # Clean and validate response
-        action = response.text.strip().replace('*', '')
-        allowed_actions = ["Alert", "Task1", "Task2"]
-        
-        if action in allowed_actions:
-            print(f"🚨 [AI DECISION] Action Required: {action}. Publishing to {ACTIONS_TOPIC}")
+        if action in ["Alert", "Task1", "Task2"]:
+            print(f"🚨 [AI DECISION] {action} required!")
             mqtt_c.publish(ACTIONS_TOPIC, action)
         else:
-            print(f"✅ [AI OBSERVATION] Status: Normal (Gemini said: {action})")
+            print(f"✅ [AI OBSERVATION] Status: Normal")
             
     except Exception as e:
-        print(f"❌ [GEMINI ERROR] API call failed: {e}")
+        error_msg = str(e)
+        if "429" in error_msg:
+            # Parse Google's 'retry in X seconds' message
+            wait_time = GEMINI_COOLDOWN
+            match = re.search(r"retry in (\d+)", error_msg)
+            if match:
+                wait_time = int(match.group(1)) + 5
+            
+            print(f"⛔ [RATE LIMIT] Google requested {wait_time}s pause.")
+            next_allowed_call_time = asyncio.get_event_loop().time() + wait_time
+        else:
+            print(f"❌ [GEMINI ERROR] {e}")
 
 async def ml_worker(mqtt_c):
-    """Consumes data from Kafka and manages the time-gated batching logic."""
-    global last_gemini_call_time
-    asyncio.create_task(heartbeat())
-    
+    """Consumes Kafka data and manages time-gated batching with anti-bloat."""
+    global next_allowed_call_time
     data_buffer = []
+    unique_group = f"ml-brain-{uuid.uuid4().hex[:6]}"
 
     while True:
         try:
             consumer = AIOKafkaConsumer(
                 INPUT_TOPIC,
                 bootstrap_servers=BOOTSTRAP_SERVERS,
-                group_id="ml-brain-group",
+                group_id=unique_group,
                 value_deserializer=lambda m: json.loads(m.decode('utf-8')),
-                auto_offset_reset='earliest'
+                auto_offset_reset='latest' # Ignore old backlog to avoid instant 429s
             )
             
             await consumer.start()
-            print(f"✅ [KAFKA] Connected. Watching topic: {INPUT_TOPIC}")
+            print(f"✅ [KAFKA] Connected. Watching: {INPUT_TOPIC}")
             
             async for msg in consumer:
                 data_buffer.append(msg.value)
-                
-                current_time = asyncio.get_event_loop().time()
-                time_since_last_call = current_time - last_gemini_call_time
-                
-                # Check if we meet both Volume (30 msgs) and Time (20s) requirements
+                now = asyncio.get_event_loop().time()
+
+                # Trigger Logic
                 if len(data_buffer) >= MIN_BATCH_SIZE:
-                    if time_since_last_call >= GEMINI_COOLDOWN:
-                        # TRIGGER AI
-                        last_gemini_call_time = current_time
+                    if now >= next_allowed_call_time:
+                        print(f"🚀 [TRIGGER] Batch size {len(data_buffer)} reached. Calling AI.")
+                        batch_to_send = list(data_buffer)
+                        data_buffer.clear() # Clear immediately to prevent re-sending
                         
-                        # Create task with a copy of the buffer and clear the original
-                        asyncio.create_task(ask_gemini_and_act(list(data_buffer), mqtt_c))
-                        data_buffer.clear()
+                        # Set next cooldown
+                        next_allowed_call_time = now + GEMINI_COOLDOWN
+                        asyncio.create_task(ask_gemini_and_act(batch_to_send, mqtt_c))
                     else:
-                        # Log status occasionally so we know it's still working
-                        if len(data_buffer) % 50 == 0:
-                            wait_remaining = int(GEMINI_COOLDOWN - time_since_last_call)
-                            print(f"⏳ [BUFFERING] {len(data_buffer)} msgs in queue. Cooldown: {wait_remaining}s left.")
+                        # ANTI-BLOAT: If API is on cooldown, don't let buffer grow forever
+                        if len(data_buffer) > MAX_BUFFER_SIZE:
+                            print(f"🗑️ [BUFFER FULL] API on cooldown. Dropping old data. Buffer: {len(data_buffer)}")
+                            data_buffer = data_buffer[-50:] # Keep only the latest 50
+                        
+                        if len(data_buffer) % 20 == 0:
+                            wait_rem = int(next_allowed_call_time - now)
+                            print(f"⏳ [COOLDOWN] Waiting {wait_rem}s more. Buffer: {len(data_buffer)}")
 
         except Exception as e:
             print(f"⚠️ [KAFKA ERROR] {e}. Retrying in 10s...")
             await asyncio.sleep(10)
         finally:
-            # Ensure consumer is closed before attempting restart
-            try:
-                await consumer.stop()
-            except:
-                pass
+            await consumer.stop()
 
 async def main():
-    """Main entry point: Connects to MQTT and starts the ML worker."""
     print(f"🚀 Starting ML Brain Service: {SERVICE_ID}")
     
     ssl_ctx = ssl.create_default_context()
@@ -124,15 +134,8 @@ async def main():
     
     try:
         print("🔗 [MQTT] Connecting to HiveMQ Cloud...")
-        await mqtt_c.connect(
-            "31d09ce8b7fa4a92aafc62ae06187541.s1.eu.hivemq.cloud", 
-            8883, 
-            ssl=ssl_ctx
-        )
-        
-        # Start worker
+        await mqtt_c.connect("31d09ce8b7fa4a92aafc62ae06187541.s1.eu.hivemq.cloud", 8883, ssl=ssl_ctx)
         await ml_worker(mqtt_c)
-        
     except Exception as e:
         print(f"💀 [FATAL ERROR] {e}")
 
