@@ -116,10 +116,4 @@ if __name__ == "__main__":
 
 
 
-        """
-create table public.sensor_data (
-  key text not null,
-  value text null,
-  constraint sensor_data_pkey primary key (key)
-) TABLESPACE pg_default;
-"""
+        
