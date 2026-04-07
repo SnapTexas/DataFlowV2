@@ -1,8 +1,10 @@
 services:
   validation:
-    build: .  # This will now look for the file named 'Dockerfile'
+    build: .
     volumes:
       - .:/app 
+    env_file:
+      - .env
     environment:
       - PYTHONUNBUFFERED=1
     networks:

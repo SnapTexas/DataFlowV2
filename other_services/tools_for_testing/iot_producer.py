@@ -31,6 +31,7 @@ PAYLOADS = {
     2: {"service_id": "ALL", "msg": "IDLE", "condition": None, "expected_reponse": False},
     3: {"temp": 0}, # Placeholder for random number
     4: {"service_id": "ALL", "msg": "STATUS", "condition": None, "expected_reponse": False},
+    5: {"temp":300}
 }
 
 async def publisher_loop(client):
@@ -68,9 +69,12 @@ async def publisher_loop(client):
                 current_payload = PAYLOADS[payload_choice].copy()
                 
                 # If it's the temperature payload, update with random number
-                if "temp" in current_payload:
+                if "temp" in current_payload and payload_choice==3:
+                    print("Normal")
                     current_payload["temp"] = random.randint(1, 100)
-
+                elif "temp" in current_payload and payload_choice==5:
+                    print("abnormal")
+                    current_payload["temp"] = random.randint(300,400)
                 if client.is_connected:
                     payload_json = json.dumps(current_payload)
                     client.publish(topic, payload_json, qos=0)
