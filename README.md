@@ -37,7 +37,7 @@ The following diagram illustrates the high-level system architechture of DataFlo
 The following diagram illustrates the high-level journey of data through DataFlow-V2, from IoT device generation to inference, storage, and actions.
 
 <p align="center">
-  <img src="assets/dataflow-v2-flow.jpg" alt="DataFlow-V2 Data Flow Diagram" width="650">
+  <img src="data%20flow%20diagram.png" alt="DataFlow-V2 Data Flow Diagram" width="650">
 </p>
 
 ### Data Processing Stages
