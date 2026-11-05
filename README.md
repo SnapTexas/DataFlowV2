@@ -28,7 +28,7 @@ DataFlow-V2 follows a modular architecture in which data ingestion, stream proce
 The following diagram illustrates the high-level system architechture of DataFlow-V2 how all services interact.
 
 <p align="center">
-  <img src="assets/dataflow-v2-flow.jpg" alt="DataFlow-V2 Data Flow Diagram" width="650">
+  <img src="high_level_system_acrhitechture.png" alt="DataFlow-V2 Data Flow Diagram" width="650">
 </p>
 
 
